@@ -35,11 +35,11 @@ export class TopologicalCommitStream {
    * return all commits that were writable.
    */
   public async write(commit: Commit): Promise<Commit[]> {
-    const result: Commit[] = [];
     const initialResult = await this.writeSingle(commit);
     if (!initialResult) {
       return [];
     }
+    const result: Commit[] = [initialResult];
 
     const stack: Commit[] = [commit];
     while (stack.length > 0) {

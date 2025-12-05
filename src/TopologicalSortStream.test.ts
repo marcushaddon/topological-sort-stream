@@ -1,34 +1,45 @@
 // import * as fc from "fast-check";
-import { TopologicalCommitStream } from "./TopologicalCommitStream";
-import type { Commit } from "./TopologicalCommitStream";
+import { TopologicalSortStream } from "./TopologicalSortStream";
+import type { DAGNode } from "./TopologicalSortStream";
+
+const nodeImpl = (testNode: {
+  _id: string;
+  _ancestors: string[];
+}): DAGNode<string> => ({
+  ...testNode,
+  id() {
+    return testNode._id;
+  },
+  ancestors() {
+    return testNode._ancestors;
+  },
+  data: testNode._id,
+});
 
 export const makeBranch = ({
   name,
   length,
   base,
-  main,
 }: {
   name: string;
   length: number;
-  base?: Commit;
-  main?: boolean | undefined;
-}): Commit[] =>
-  [...Array(length)].reduce((branch: Commit[], _, n) => {
+  base?: DAGNode<string>;
+}): DAGNode<string>[] =>
+  [...Array(length)].reduce((branch: DAGNode<string>[], _, n) => {
     const prev = branch.length === 0 ? base : branch[branch.length - 1];
     return [
       ...branch,
-      {
-        ref: `${name}${n}`,
-        baseRef: prev?.ref,
-        metadata: {
-          message: `${name}-${n}`,
-          main,
-        },
-      },
+      nodeImpl({
+        _id: `${name}${n}`,
+        _ancestors: prev ? [prev.id()] : [],
+      }),
     ];
   }, []);
 
-export const makeMerge = (branch1: Commit[], branch2: Commit[]): Commit => {
+export const makeMerge = (
+  branch1: DAGNode<string>[],
+  branch2: DAGNode<string>[]
+): DAGNode<string> => {
   if (branch1.length === 0 || branch2.length === 0) {
     throw new Error("Cant merge empty branches");
   }
@@ -36,15 +47,14 @@ export const makeMerge = (branch1: Commit[], branch2: Commit[]): Commit => {
   const head1 = branch1[branch1.length - 1];
   const head2 = branch2[branch2.length - 1];
 
-  return {
-    ref: `merge(${head1.ref}+${head2.ref})`,
-    baseRef: head1.ref,
-    mergeRef: head2.ref,
-  };
+  return nodeImpl({
+    _id: `merge(${head1.id()}+${head2.id()})`,
+    _ancestors: [head1.id(), head2.id()],
+  });
 };
 
 const newLocalOnlyStream = () =>
-  new TopologicalCommitStream(new Map(), async () => undefined);
+  new TopologicalSortStream(new Map(), async () => undefined);
 
 describe("Thing", () => {
   it("happy path", async () => {
@@ -59,13 +69,13 @@ describe("Thing", () => {
     const thirdRes = await stream.write(branch[2]);
 
     expect(firstRes.length).toEqual(1);
-    expect(firstRes[0].ref).toEqual(branch[0].ref);
+    expect(firstRes[0].id()).toEqual(branch[0].id());
 
     expect(secondRes.length).toEqual(1);
-    expect(secondRes[0].ref).toEqual(branch[1].ref);
+    expect(secondRes[0].id()).toEqual(branch[1].id());
 
     expect(thirdRes.length).toEqual(1);
-    expect(thirdRes[0].ref).toEqual(branch[2].ref);
+    expect(thirdRes[0].id()).toEqual(branch[2].id());
   });
 
   it("handles one out of order linear", async () => {
@@ -83,13 +93,13 @@ describe("Thing", () => {
     const firstRes = await stream.write(branch[0]);
 
     expect(firstRes.length).toEqual(2);
-    expect(firstRes[0].ref).toEqual(branch[0].ref);
-    expect(firstRes[1].ref).toEqual(branch[1].ref);
+    expect(firstRes[0].id()).toEqual(branch[0].id());
+    expect(firstRes[1].id()).toEqual(branch[1].id());
 
     const thirdRes = await stream.write(branch[2]);
 
     expect(thirdRes.length).toEqual(1);
-    expect(thirdRes[0].ref).toEqual(branch[2].ref);
+    expect(thirdRes[0].id()).toEqual(branch[2].id());
   });
 
   it("handles out of order merge", async () => {
@@ -120,7 +130,7 @@ describe("Thing", () => {
 
     const branch2Res2 = await stream.write(branch2[1]);
     expect(branch2Res2.length).toEqual(2);
-    expect(branch2Res2[0].ref).toEqual(branch2[1].ref);
-    expect(branch2Res2[1].ref).toEqual(mergeCommit.ref);
+    expect(branch2Res2[0].id()).toEqual(branch2[1].id());
+    expect(branch2Res2[1].id()).toEqual(mergeCommit.id());
   });
 });

@@ -1,7 +1,18 @@
 import * as fc from "fast-check";
-import { Commit } from "./TopologicalCommitStream";
 
-export class Graph {
+/**
+ * Bookmarking this for now. This will be useful for testing our
+ * actual LC code, but our commit stream should work on *any* dag.
+ */
+
+export type Commit = {
+  ref: string;
+  baseRef?: string;
+  mergeRef?: string;
+  metadata: { main: boolean };
+};
+
+export class CommitGraph {
   private commits = new Map<string, Commit>();
   private _mainHead?: string;
   get mainHead(): string | undefined {
@@ -51,19 +62,22 @@ export class Graph {
   }
 }
 
-export class CommitGraphArb extends fc.Arbitrary<Graph> {
+export class CommitGraphArb extends fc.Arbitrary<CommitGraph> {
   private refIdx = 0;
   constructor() {
     super();
   }
 
-  generate(mrng: fc.Random, biasFactor: number | undefined): fc.Value<Graph> {
+  generate(
+    mrng: fc.Random,
+    biasFactor: number | undefined
+  ): fc.Value<CommitGraph> {
     const root: Commit = {
       ref: fc.string().generate(mrng, biasFactor).value,
       metadata: { main: true },
     };
 
-    const graph = new Graph();
+    const graph = new CommitGraph();
     graph.add(root);
     const heads = new Set<string>([root.ref]);
 
@@ -80,7 +94,11 @@ export class CommitGraphArb extends fc.Arbitrary<Graph> {
     return new fc.Value(graph, undefined);
   }
 
-  private addCommit(graph: Graph, heads: Set<string>, mrng: fc.Random): Commit {
+  private addCommit(
+    graph: CommitGraph,
+    heads: Set<string>,
+    mrng: fc.Random
+  ): Commit {
     // pick random head
     const idx = mrng.nextInt() % heads.size;
     const head = [...heads.values()][idx];
@@ -115,15 +133,15 @@ export class CommitGraphArb extends fc.Arbitrary<Graph> {
     return `${this.refIdx++}`;
   }
 
-  canShrinkWithoutContext(value: unknown): value is Graph {
+  canShrinkWithoutContext(value: unknown): value is CommitGraph {
     // assure that value is graph and graph.size > 1 ?
     return false;
   }
 
   shrink(
-    value: Graph,
+    value: CommitGraph,
     context: unknown | undefined
-  ): fc.Stream<fc.Value<Graph>> {
+  ): fc.Stream<fc.Value<CommitGraph>> {
     return new fc.Stream(
       (function* () {
         while (value.size > 1) {

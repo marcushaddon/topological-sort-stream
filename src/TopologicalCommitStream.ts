@@ -2,15 +2,17 @@ export type Commit = {
   ref: string;
   baseRef?: string;
   mergeRef?: string;
+  metadata: any;
 };
 
 /**
- * Commithing allows you to write edits. Edits can be based on other edits,
- * or merge two edits together. Edits form a DAG.
+ * TopologicalCommitStream allows you to write commits. If the
+ * commit was in topological order, it will be returned in the result,
+ * along with possibly other commits that had previously received
+ * out of order. The result array will be in topoligical order.
  *
- * We also need to send edits to subscribers, but subscribers
- * must only ever see edits in valid top-sort. Sometimes our subscribers
- * are unavailable.
+ * If the commit was not in topological order, the result will
+ * be empty.
  */
 export class TopologicalCommitStream {
   private commitCache: Map<string, Commit>;

@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "noUnusedParameters": false,
+    "noUnusedLocals": false,
     "module": "CommonJS",
     "verbatimModuleSyntax": false,
     "allowImportingTsExtensions": false

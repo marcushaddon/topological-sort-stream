@@ -4,6 +4,12 @@ export interface DAGNode<T> {
   data: T;
 }
 
+export interface NodeCache<T extends DAGNode<unknown>> {
+  set(id: string, node: T): NodeCache<T>;
+  has(id: string): boolean;
+  delete(id: string): void;
+}
+
 /**
  * TopologicalCommitStream allows you to write commits. If the
  * commit was in topological order, it will be returned in the result,
@@ -14,7 +20,7 @@ export interface DAGNode<T> {
  * be empty.
  */
 export class TopologicalSortStream<T extends DAGNode<unknown>> {
-  private nodeCache: Map<string, T>;
+  private nodeCache: NodeCache<T>;
   private fetchNode: (ref: string) => Promise<T | undefined>;
   // reverse index of missing dep -> commit
   private orphans: Map<string, Map<string, T>> = new Map<
@@ -24,7 +30,7 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
   private inProcessing = new Set<string>();
 
   public constructor(
-    itemCache: Map<string, T> = new Map<string, T>(),
+    itemCache: NodeCache<T> = new Map<string, T>(),
     fetchItem: (id: string) => Promise<T | undefined>
   ) {
     this.nodeCache = itemCache;

@@ -1,7 +1,7 @@
 // import * as fc from "fast-check";
 import * as fc from "fast-check";
 import { TopologicalSortStream } from "./TopologicalSortStream";
-import type { DAGNode } from "./TopologicalSortStream";
+import type { DAGNode, NodeCache } from "./TopologicalSortStream";
 import { DAGArb, IntNode } from "./DAGArbitrary";
 
 export const topologicallySorted = (nodes: IntNode[]): boolean => {
@@ -72,6 +72,43 @@ export const makeMerge = (
 
 const newLocalOnlyStream = () =>
   new TopologicalSortStream(new Map(), async () => undefined);
+
+class CacheWithInvalidation<T extends DAGNode<unknown>>
+  implements NodeCache<T>
+{
+  private capacity: number;
+  private cached = new Map<string, T>();
+  private repo = new Map<string, T>();
+
+  constructor(capacity: number) {
+    this.capacity = capacity;
+  }
+
+  public has(id: string) {
+    return this.cached.has(id);
+  }
+
+  public delete(id: string) {
+    return this.cached.delete(id);
+  }
+
+  public set(id: string, node: T) {
+    this.cached.set(id, node);
+    while (this.cached.size > this.capacity) {
+      // SAFETY: as long as capacity is > 0, then size > capcity
+      // ensures next entry is defined
+      const oldest = this.cached.entries().next()!.value![1];
+      this.cached.delete(oldest.id());
+      this.repo.set(oldest.id(), oldest);
+    }
+
+    return this;
+  }
+
+  public getFromRepo(id: string): T | undefined {
+    return this.repo.get(id);
+  }
+}
 
 describe("TopologicalSortStream", () => {
   it("linear events", async () => {
@@ -151,26 +188,55 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2[1].id()).toEqual(mergeCommit.id());
   });
 
-  it("emits entire graph in topological order (no cache invalidation)", async () => {
-    fc.assert(
+  it("emits entire graph in topological order (with cache invalidation)", async () => {
+    await fc.assert(
       fc.asyncProperty(new DAGArb(), async (dag) => {
         const cache = new Map<string, IntNode>();
-        // ffr, i think we'll need to use scheduler.scheduleFunction in our mock fetch item
-        // to test races with async fetching
         const fetchItem = jest
           .fn()
           .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
 
         const uut = new TopologicalSortStream<IntNode>(cache, fetchItem);
+        const orderedNodes: IntNode[] = [];
+        const writeInOrder = async (node: IntNode) => {
+          const orderedBatch = await uut.write(node);
+          orderedNodes.push(...orderedBatch);
+        };
+
+        const unorderedNodes = dag.nodesShuffled();
+
+        await Promise.all(unorderedNodes.map((node) => writeInOrder(node)));
+
+        expect(orderedNodes.length).toEqual(dag.size);
+        expect(topologicallySorted(orderedNodes)).toBeTruthy();
+      }),
+      {
+        numRuns: 20,
+      }
+    );
+  });
+
+  it("emits entire graph in topological order (no cache invalidation)", async () => {
+    await fc.assert(
+      fc.asyncProperty(new DAGArb(), async (dag) => {
+        const cache = new CacheWithInvalidation<IntNode>(10);
+
+        // THIS is where we need to schedule I think
+        const fetchItem = async (id: string) => {
+          return cache.getFromRepo(id);
+        };
+
+        const uut = new TopologicalSortStream<IntNode>(cache, fetchItem);
+
+        const writeInOrder = async (node: IntNode) => {
+          const orderedBatch = await uut.write(node);
+          orderedNodes.push(...orderedBatch);
+        };
 
         const unorderedNodes = dag.nodesShuffled();
         const orderedNodes: IntNode[] = [];
 
-        for (let i = 0; i < unorderedNodes.length; i++) {
-          const node = unorderedNodes[i];
-          const orderedBatch = await uut.write(node);
-          orderedNodes.push(...orderedBatch);
-        }
+        await Promise.all(unorderedNodes.map((node) => writeInOrder(node)));
 
         expect(orderedNodes.length).toEqual(dag.size);
         expect(topologicallySorted(orderedNodes)).toBeTruthy();

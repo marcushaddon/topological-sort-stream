@@ -1,8 +1,8 @@
 import * as fc from "fast-check";
-import { DAGArb, FloatDAG, FloatNode } from "./DAGArbitrary";
+import { DAGArb, IntDAG } from "./DAGArbitrary";
 import { topologicallySorted } from "./TopologicalSortStream.test";
 
-const noCycles = (g: FloatDAG): boolean => {
+const noCycles = (g: IntDAG): boolean => {
   const adjacencies = g.getAdjacencies();
   const nodeIds = g.getNodeIds();
   while (nodeIds.length > 0) {
@@ -27,34 +27,11 @@ const noCycles = (g: FloatDAG): boolean => {
   return true;
 };
 
-describe("FloatNode sanity check", () => {
-  it("implements lt correctly", () => {
-    fc.assert(
-      fc.property(fc.float(), fc.float(), (numA, numB) => {
-        const nodeA = new FloatNode(numA);
-        const nodeB = new FloatNode(numB);
-
-        return (
-          (Math.abs(numA - numB) > 1 && nodeA.lt(nodeB)) ||
-          nodeB.lt(nodeA) ||
-          (!nodeA.lt(nodeB) && !nodeB.lt(nodeA))
-        );
-      })
-    );
-  });
-});
-
 describe("DAGArb", () => {
   it("shuffles its nodes", () => {
     fc.property(new DAGArb(), (dag) => {
       const shuffled = dag.nodesShuffled(1);
-      return (
-        shuffled.length === dag.size &&
-        shuffled.some((node, n) => {
-          return n < dag.size - 1 && shuffled[n + 1].lt(node);
-        }) &&
-        !topologicallySorted(shuffled)
-      );
+      return shuffled.length === dag.size && !topologicallySorted(shuffled);
     });
   });
   it("will create branchs", () => {

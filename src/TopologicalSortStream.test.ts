@@ -2,14 +2,9 @@
 import * as fc from "fast-check";
 import { TopologicalSortStream } from "./TopologicalSortStream";
 import type { DAGNode } from "./TopologicalSortStream";
-import { DAGArb, FloatNode } from "./DAGArbitrary";
+import { DAGArb, IntNode } from "./DAGArbitrary";
 
-// this is mismatched with our graph arbitrary
-// just because two nodes are strictly ordered as floats (1.2 < 3.6)
-// doesnt mean they are ancestors in the graph, the way we are building it
-// we would either need to walk the graph to validate
-// we could uyse a
-export const topologicallySorted = (nodes: FloatNode[]): boolean => {
+export const topologicallySorted = (nodes: IntNode[]): boolean => {
   while (nodes.length > 0) {
     const first = nodes.shift()!;
     if (first.ancestors().length > 0) {
@@ -159,17 +154,17 @@ describe("TopologicalSortStream", () => {
   it("emits entire graph in topological order (no cache invalidation)", async () => {
     fc.assert(
       fc.asyncProperty(new DAGArb(), async (dag) => {
-        const cache = new Map<string, FloatNode>();
+        const cache = new Map<string, IntNode>();
         // ffr, i think we'll need to use scheduler.scheduleFunction in our mock fetch item
         // to test races with async fetching
         const fetchItem = jest
           .fn()
           .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
 
-        const uut = new TopologicalSortStream<FloatNode>(cache, fetchItem);
+        const uut = new TopologicalSortStream<IntNode>(cache, fetchItem);
 
         const unorderedNodes = dag.nodesShuffled();
-        const orderedNodes: FloatNode[] = [];
+        const orderedNodes: IntNode[] = [];
 
         for (let i = 0; i < unorderedNodes.length; i++) {
           const node = unorderedNodes[i];

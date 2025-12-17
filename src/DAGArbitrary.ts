@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { DAGNode } from "./TopologicalSortStream";
 
-export class FloatNode implements DAGNode<number> {
+export class IntNode implements DAGNode<number> {
   val: number;
   _ancestors = new Set<number>();
 
@@ -28,24 +28,15 @@ export class FloatNode implements DAGNode<number> {
   public ancestors(): string[] {
     return [...this._ancestors.values()].map((v) => v.toString());
   }
-
-  public eq(other: FloatNode) {
-    return other.val === this.val;
-  }
-
-  public lt(other: FloatNode) {
-    return Math.trunc(this.val) < Math.trunc(other.val);
-  }
 }
 
-export class FloatDAG {
+export class IntDAG {
   private bias: number;
   private random: fc.Random;
-  private nodeMap: Map<string, FloatNode>;
-  private topSortedNodes: FloatNode[];
+  private nodeMap: Map<string, IntNode>;
+  private topSortedNodes: IntNode[];
   private shrinkStep: number;
   private shrinkIdx = 0;
-  public maxVal: number;
   // mostly for testing the arb itself
 
   public getAdjacencies() {
@@ -72,14 +63,11 @@ export class FloatDAG {
     this.bias = bias || 1;
     this.random = random;
     const count = random.nextInt(1, 4000);
-    const nodes = new Array<FloatNode>(count);
-    this.maxVal = count * (bias ?? 1);
+    const nodes = new Array<IntNode>(count);
     for (let i = 0; i < count; i++) {
-      const num = random.nextDouble() * this.maxVal;
-      nodes[i] = new FloatNode(num);
+      nodes[i] = new IntNode(i);
     }
 
-    nodes.sort((a, b) => (a.lt(b) ? -1 : 0));
     this.topSortedNodes = nodes;
     this.nodeMap = new Map(
       this.topSortedNodes.map((node) => [node.id(), node])
@@ -98,15 +86,11 @@ export class FloatDAG {
     // how can we
     const connectionProbability = bias ?? OUT_DEGREE_MAX / count; // really guessing here
     for (let i = 0; i < count; i++) {
-      const fromNode = this.topSortedNodes[i];
       // only create an edge a->b where a < b in top sort
       let outDegree = 0;
       for (let j = i + 1; j < count && outDegree < OUT_DEGREE_MAX; j++) {
-        const toCandidate = this.topSortedNodes[j];
-        const incomparable = !fromNode.lt(toCandidate);
         const inDegree = this.topSortedNodes[j].ancestors.length;
         if (
-          incomparable &&
           inDegree < IN_DEGREE_MAX &&
           random.nextDouble() < connectionProbability
         ) {
@@ -117,7 +101,7 @@ export class FloatDAG {
     }
   }
 
-  private connect(from: FloatNode, to: FloatNode) {
+  private connect(from: IntNode, to: IntNode) {
     to.addAncestor(from.val);
   }
 
@@ -137,37 +121,31 @@ export class FloatDAG {
     }
   }
 
-  public nodesShuffled(bias = this.bias): FloatNode[] {
+  public nodesShuffled(bias = this.bias): IntNode[] {
     // returning 1 when a < b puts nodes out of order
     // randomly decide whether to disorder nodes, with
     // probability approaching 1 with bias
-    return [...this.topSortedNodes].sort((a, b) => {
+    return [...this.topSortedNodes].sort(() => {
       // the result that will maybe result in these
       // two items being out of or in order
-      const [maybeSwapResult, maybeOrderResult] = a.lt(b) ? [1, -1] : [-1, 1];
-      return this.random.nextDouble() < bias || true
-        ? maybeSwapResult
-        : maybeOrderResult;
+      return this.random.nextDouble() < bias ? 1 : -1;
     });
   }
 }
 
-export class DAGArb extends fc.Arbitrary<FloatDAG> {
-  generate(
-    mrng: fc.Random,
-    biasFactor: number | undefined
-  ): fc.Value<FloatDAG> {
-    return new fc.Value(new FloatDAG(mrng, biasFactor), undefined);
+export class DAGArb extends fc.Arbitrary<IntDAG> {
+  generate(mrng: fc.Random, biasFactor: number | undefined): fc.Value<IntDAG> {
+    return new fc.Value(new IntDAG(mrng, biasFactor), undefined);
   }
 
-  canShrinkWithoutContext(_value: unknown): _value is FloatDAG {
+  canShrinkWithoutContext(_value: unknown): _value is IntDAG {
     return false; // todo
   }
 
   shrink(
-    value: FloatDAG,
+    value: IntDAG,
     _context: unknown | undefined
-  ): fc.Stream<fc.Value<FloatDAG>> {
+  ): fc.Stream<fc.Value<IntDAG>> {
     return new fc.Stream(
       (function* () {
         while (value.size > 1) {

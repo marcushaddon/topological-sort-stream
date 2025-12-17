@@ -13,19 +13,19 @@ export interface DAGNode<T> {
  * If the commit was not in topological order, the result will
  * be empty.
  */
-export class TopologicalSortStream<T> {
-  private nodeCache: Map<string, DAGNode<T>>;
-  private fetchNode: (ref: string) => Promise<DAGNode<T> | undefined>;
+export class TopologicalSortStream<T extends DAGNode<unknown>> {
+  private nodeCache: Map<string, T>;
+  private fetchNode: (ref: string) => Promise<T | undefined>;
   // reverse index of missing dep -> commit
-  private orphans: Map<string, Map<string, DAGNode<T>>> = new Map<
+  private orphans: Map<string, Map<string, T>> = new Map<
     string,
-    Map<string, DAGNode<T>>
+    Map<string, T>
   >();
   private inProcessing = new Set<string>();
 
   public constructor(
-    itemCache: Map<string, DAGNode<T>> = new Map<string, DAGNode<T>>(),
-    fetchItem: (id: string) => Promise<DAGNode<T> | undefined>
+    itemCache: Map<string, T> = new Map<string, T>(),
+    fetchItem: (id: string) => Promise<T | undefined>
   ) {
     this.nodeCache = itemCache;
     this.fetchNode = fetchItem;
@@ -34,14 +34,14 @@ export class TopologicalSortStream<T> {
   /**
    * TODO: wrap writeInner in try/finally to make sure always removed from processing
    */
-  public async write(node: DAGNode<T>): Promise<DAGNode<T>[]> {
+  public async write(node: T): Promise<T[]> {
     const initialResult = await this.writeSingle(node);
     if (!initialResult) {
       return [];
     }
-    const result: DAGNode<T>[] = [initialResult];
+    const result: T[] = [initialResult];
 
-    const stack: DAGNode<T>[] = [node];
+    const stack: T[] = [node];
     while (stack.length > 0) {
       const current = stack.pop()!;
       const children = this.orphans.get(current.id());
@@ -62,9 +62,7 @@ export class TopologicalSortStream<T> {
     return result;
   }
 
-  private async writeSingle(
-    commit: DAGNode<T>
-  ): Promise<DAGNode<T> | undefined> {
+  private async writeSingle(commit: T): Promise<T | undefined> {
     this.inProcessing.add(commit.id());
     const res = await this.writeSingleInner(commit);
     this.inProcessing.delete(commit.id());
@@ -76,9 +74,7 @@ export class TopologicalSortStream<T> {
    * Returns the commit if it is next in a valid top-sort.
    * Otherwise indexes it under the first missing ancestor
    */
-  private async writeSingleInner(
-    node: DAGNode<T>
-  ): Promise<DAGNode<T> | undefined> {
+  private async writeSingleInner(node: T): Promise<T | undefined> {
     const ancestors = node.ancestors();
     if (ancestors.length === 0) {
       this.nodeCache.set(node.id(), node);
@@ -126,13 +122,13 @@ export class TopologicalSortStream<T> {
     return false;
   }
 
-  private recordOrphan(ancestorRef: string, commit: DAGNode<T>) {
+  private recordOrphan(ancestorRef: string, commit: T) {
     if (this.orphans.has(ancestorRef)) {
       this.orphans.get(ancestorRef)!.set(commit.id(), commit);
     } else {
       this.orphans.set(
         ancestorRef,
-        new Map<string, DAGNode<T>>([[ancestorRef, commit]])
+        new Map<string, T>([[ancestorRef, commit]])
       );
     }
   }

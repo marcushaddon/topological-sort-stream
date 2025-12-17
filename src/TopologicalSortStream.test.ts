@@ -1,6 +1,28 @@
 // import * as fc from "fast-check";
+import * as fc from "fast-check";
 import { TopologicalSortStream } from "./TopologicalSortStream";
 import type { DAGNode } from "./TopologicalSortStream";
+import { DAGArb, FloatNode } from "./DAGArbitrary";
+
+// this is mismatched with our graph arbitrary
+// just because two nodes are strictly ordered as floats (1.2 < 3.6)
+// doesnt mean they are ancestors in the graph, the way we are building it
+// we would either need to walk the graph to validate
+// we could uyse a
+export const topologicallySorted = (nodes: FloatNode[]): boolean => {
+  while (nodes.length > 0) {
+    const first = nodes.shift()!;
+    if (first.ancestors().length > 0) {
+      return false;
+    }
+
+    for (const node of nodes) {
+      node.removeAncestor(first.val);
+    }
+  }
+
+  return true;
+};
 
 const nodeImpl = (testNode: {
   _id: string;
@@ -56,8 +78,8 @@ export const makeMerge = (
 const newLocalOnlyStream = () =>
   new TopologicalSortStream(new Map(), async () => undefined);
 
-describe("Thing", () => {
-  it("happy path", async () => {
+describe("TopologicalSortStream", () => {
+  it("linear events", async () => {
     const branch = makeBranch({
       name: "test",
       length: 3,
@@ -132,5 +154,35 @@ describe("Thing", () => {
     expect(branch2Res2.length).toEqual(2);
     expect(branch2Res2[0].id()).toEqual(branch2[1].id());
     expect(branch2Res2[1].id()).toEqual(mergeCommit.id());
+  });
+
+  it("emits entire graph in topological order (no cache invalidation)", async () => {
+    fc.assert(
+      fc.asyncProperty(new DAGArb(), async (dag) => {
+        const cache = new Map<string, FloatNode>();
+        // ffr, i think we'll need to use scheduler.scheduleFunction in our mock fetch item
+        // to test races with async fetching
+        const fetchItem = jest
+          .fn()
+          .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
+
+        const uut = new TopologicalSortStream<FloatNode>(cache, fetchItem);
+
+        const unorderedNodes = dag.nodesShuffled();
+        const orderedNodes: FloatNode[] = [];
+
+        for (let i = 0; i < unorderedNodes.length; i++) {
+          const node = unorderedNodes[i];
+          const orderedBatch = await uut.write(node);
+          orderedNodes.push(...orderedBatch);
+        }
+
+        expect(orderedNodes.length).toEqual(dag.size);
+        expect(topologicallySorted(orderedNodes)).toBeTruthy();
+      }),
+      {
+        numRuns: 20,
+      }
+    );
   });
 });

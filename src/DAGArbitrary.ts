@@ -39,15 +39,18 @@ export class FloatNode implements DAGNode<number> {
 }
 
 export class FloatDAG {
+  private bias: number;
+  private random: fc.Random;
   private nodeMap: Map<string, FloatNode>;
-  private nodeOrder: FloatNode[];
+  private topSortedNodes: FloatNode[];
   private shrinkStep: number;
   private shrinkIdx = 0;
+  public maxVal: number;
   // mostly for testing the arb itself
 
   public getAdjacencies() {
     const outgoingEdges = new Map<string, Set<string>>();
-    for (const toNode of this.nodeOrder) {
+    for (const toNode of this.topSortedNodes) {
       for (const fromNode of toNode.ancestors()) {
         outgoingEdges.set(
           fromNode,
@@ -62,21 +65,25 @@ export class FloatDAG {
   }
 
   public getNodeIds(): string[] {
-    return this.nodeOrder.map((node) => node.id());
+    return this.topSortedNodes.map((node) => node.id());
   }
 
   constructor(random: fc.Random, bias: number | undefined) {
-    const count = random.nextInt(1, 10_000);
+    this.bias = bias || 1;
+    this.random = random;
+    const count = random.nextInt(1, 4000);
     const nodes = new Array<FloatNode>(count);
-    const maxVal = count * (bias ?? 1);
+    this.maxVal = count * (bias ?? 1);
     for (let i = 0; i < count; i++) {
-      const num = random.nextDouble() * maxVal;
+      const num = random.nextDouble() * this.maxVal;
       nodes[i] = new FloatNode(num);
     }
 
     nodes.sort((a, b) => (a.lt(b) ? -1 : 0));
-    this.nodeOrder = nodes;
-    this.nodeMap = new Map(this.nodeOrder.map((node) => [node.id(), node]));
+    this.topSortedNodes = nodes;
+    this.nodeMap = new Map(
+      this.topSortedNodes.map((node) => [node.id(), node])
+    );
     // my reasoning is that each time we shrink, we dont want to
     // just take something off the end or front, because we wont
     // be maximizing how far we can shrink (assuming it stops shrinking
@@ -88,17 +95,22 @@ export class FloatDAG {
     const IN_DEGREE_MAX = 5; // TODO: derive this from bias or something
     const OUT_DEGREE_MAX = 5; // same
 
+    // how can we
     const connectionProbability = bias ?? OUT_DEGREE_MAX / count; // really guessing here
     for (let i = 0; i < count; i++) {
+      const fromNode = this.topSortedNodes[i];
       // only create an edge a->b where a < b in top sort
       let outDegree = 0;
       for (let j = i + 1; j < count && outDegree < OUT_DEGREE_MAX; j++) {
-        const inDegree = this.nodeOrder[j].ancestors.length;
+        const toCandidate = this.topSortedNodes[j];
+        const incomparable = !fromNode.lt(toCandidate);
+        const inDegree = this.topSortedNodes[j].ancestors.length;
         if (
+          incomparable &&
           inDegree < IN_DEGREE_MAX &&
           random.nextDouble() < connectionProbability
         ) {
-          this.connect(this.nodeOrder[i], this.nodeOrder[j]);
+          this.connect(this.topSortedNodes[i], this.topSortedNodes[j]);
           outDegree++;
         }
       }
@@ -118,11 +130,25 @@ export class FloatDAG {
     // we should find a wa
     this.shrinkIdx = (this.shrinkIdx + this.shrinkStep) % this.size;
     // safety: should always have length > 1 due to canShrinkWithoutContext
-    const toRemove = this.nodeOrder.splice(this.shrinkIdx, 1)![0];
+    const toRemove = this.topSortedNodes.splice(this.shrinkIdx, 1)![0];
     this.nodeMap.delete(toRemove.id());
-    for (const remaining of this.nodeOrder) {
+    for (const remaining of this.topSortedNodes) {
       remaining.removeAncestor(toRemove.val);
     }
+  }
+
+  public nodesShuffled(bias = this.bias): FloatNode[] {
+    // returning 1 when a < b puts nodes out of order
+    // randomly decide whether to disorder nodes, with
+    // probability approaching 1 with bias
+    return [...this.topSortedNodes].sort((a, b) => {
+      // the result that will maybe result in these
+      // two items being out of or in order
+      const [maybeSwapResult, maybeOrderResult] = a.lt(b) ? [1, -1] : [-1, 1];
+      return this.random.nextDouble() < bias || true
+        ? maybeSwapResult
+        : maybeOrderResult;
+    });
   }
 }
 

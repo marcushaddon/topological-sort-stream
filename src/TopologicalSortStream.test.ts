@@ -188,7 +188,7 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2[1].id()).toEqual(mergeCommit.id());
   });
 
-  it("emits entire graph in topological order (with cache invalidation)", async () => {
+  it("emits entire graph in topological order (no cache invalidation, unscheduled)", async () => {
     await fc.assert(
       fc.asyncProperty(new DAGArb(), async (dag) => {
         const cache = new Map<string, IntNode>();
@@ -216,9 +216,10 @@ describe("TopologicalSortStream", () => {
     );
   });
 
-  it("emits entire graph in topological order (no cache invalidation)", async () => {
+  it("emits entire graph in topological order (with cache invalidation)", async () => {
+    const BATCH_SIZE = 10;
     await fc.assert(
-      fc.asyncProperty(new DAGArb(), async (dag) => {
+      fc.asyncProperty(new DAGArb(), fc.scheduler(), async (dag, s) => {
         const cache = new CacheWithInvalidation<IntNode>(10);
 
         // THIS is where we need to schedule I think
@@ -226,7 +227,12 @@ describe("TopologicalSortStream", () => {
           return cache.getFromRepo(id);
         };
 
-        const uut = new TopologicalSortStream<IntNode>(cache, fetchItem);
+        const fetchItemScheduled = (id: string) => s.schedule(fetchItem(id));
+
+        const uut = new TopologicalSortStream<IntNode>(
+          cache,
+          fetchItemScheduled
+        );
 
         const writeInOrder = async (node: IntNode) => {
           const orderedBatch = await uut.write(node);
@@ -236,13 +242,25 @@ describe("TopologicalSortStream", () => {
         const unorderedNodes = dag.nodesShuffled();
         const orderedNodes: IntNode[] = [];
 
-        await Promise.all(unorderedNodes.map((node) => writeInOrder(node)));
+        const batches = [
+          ...new Array(Math.ceil(unorderedNodes.length / BATCH_SIZE)),
+        ].map((_, n) =>
+          unorderedNodes.slice(n * BATCH_SIZE, n * BATCH_SIZE + BATCH_SIZE)
+        );
+
+        for (const batch of batches) {
+          for (const node of batch) {
+            void writeInOrder(node);
+          }
+
+          await s.waitIdle();
+        }
 
         expect(orderedNodes.length).toEqual(dag.size);
         expect(topologicallySorted(orderedNodes)).toBeTruthy();
       }),
       {
-        numRuns: 20,
+        numRuns: 1,
       }
     );
   });

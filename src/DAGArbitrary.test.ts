@@ -30,7 +30,7 @@ const noCycles = (g: IntDAG): boolean => {
 describe("DAGArb", () => {
   it("shuffles its nodes", () => {
     fc.property(new DAGArb(), (dag) => {
-      const shuffled = dag.nodesShuffled(1);
+      const shuffled = dag.nodesShuffled();
       return shuffled.length === dag.size && !topologicallySorted(shuffled);
     });
   });

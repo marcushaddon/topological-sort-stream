@@ -31,7 +31,6 @@ export class IntNode implements DAGNode<number> {
 }
 
 export class IntDAG {
-  private bias: number;
   private random: fc.Random;
   private nodeMap: Map<string, IntNode>;
   private topSortedNodes: IntNode[];
@@ -60,7 +59,6 @@ export class IntDAG {
   }
 
   constructor(random: fc.Random, bias: number | undefined) {
-    this.bias = bias || 1;
     this.random = random;
     const count = random.nextInt(1, 4000);
     const nodes = new Array<IntNode>(count);
@@ -121,14 +119,14 @@ export class IntDAG {
     }
   }
 
-  public nodesShuffled(bias = this.bias): IntNode[] {
+  public nodesShuffled(): IntNode[] {
     // returning 1 when a < b puts nodes out of order
     // randomly decide whether to disorder nodes, with
     // probability approaching 1 with bias
     return [...this.topSortedNodes].sort(() => {
       // the result that will maybe result in these
       // two items being out of or in order
-      return this.random.nextDouble() < bias ? 1 : -1;
+      return this.random.nextDouble() > 0.5 ? 1 : -1;
     });
   }
 }

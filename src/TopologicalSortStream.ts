@@ -27,7 +27,7 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     string,
     Map<string, T>
   >();
-  private inProcessing = new Set<string>();
+  private inProcessing = new Map<string, T>();
 
   public constructor(
     itemCache: NodeCache<T> = new Map<string, T>(),
@@ -51,11 +51,14 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     while (stack.length > 0) {
       const current = stack.pop()!;
       // DING DING DING pt2, our children can be in processing!!!!!
-      const children = this.orphans.get(current.id());
-      if (!children || children.size === 0) {
-        continue;
-      }
-      for (const [, child] of children) {
+      const orphanedChildren = [
+        ...(this.orphans.get(current.id())?.values() ?? []),
+      ];
+      const inProcessChildren = [...this.inProcessing.values()].filter((node) =>
+        node.ancestors().includes(current.id())
+      );
+
+      for (const child of [...orphanedChildren, ...inProcessChildren]) {
         const added = await this.writeSingle(child);
         if (added) {
           // SAFETY: if we are adding this to the result,
@@ -70,7 +73,7 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
   }
 
   private async writeSingle(node: T): Promise<T | undefined> {
-    this.inProcessing.add(node.id());
+    this.inProcessing.set(node.id(), node);
     const res = await this.writeSingleInner(node);
     this.inProcessing.delete(node.id());
 

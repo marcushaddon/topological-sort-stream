@@ -30,7 +30,7 @@ export class IntNode implements DAGNode<number> {
   }
 }
 
-const MAX_SIZE = 10;
+const MAX_SIZE = 4000;
 
 export class IntDAG {
   private random: fc.Random;
@@ -81,8 +81,8 @@ export class IntDAG {
     // working from the front or back of the sort
     // this.shrinkStep = Math.abs(random.nextInt());
 
-    const IN_DEGREE_MAX = 1; // TODO: derive this from bias or something
-    const OUT_DEGREE_MAX = 1; // same
+    const IN_DEGREE_MAX = 5; // TODO: derive this from bias or something
+    const OUT_DEGREE_MAX = 5; // same
 
     // how can we
     const connectionProbability = bias ?? OUT_DEGREE_MAX / count; // really guessing here

@@ -270,21 +270,6 @@ describe("TopologicalSortStream", () => {
         await s.waitIdle();
       }
 
-      const notWritten = unorderedNodes.filter(
-        (node) =>
-          orderedNodes.findIndex((oNode) => oNode.id() === node.id()) === -1
-      );
-
-      const leastAncestors = notWritten.reduce((winner, current) =>
-        current.ancestors().length < winner.ancestors().length
-          ? current
-          : winner
-      );
-
-      console.log(leastAncestors);
-
-      expect(notWritten).toBeUndefined();
-
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
     }

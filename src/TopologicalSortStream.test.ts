@@ -106,7 +106,12 @@ class CacheWithInvalidation<T extends DAGNode<unknown>>
   }
 
   public getFromRepo(id: string): T | undefined {
-    return this.repo.get(id);
+    const res = this.repo.get(id);
+    if (res) {
+      this.set(res.id(), res);
+    }
+
+    return res;
   }
 }
 
@@ -170,12 +175,12 @@ describe("TopologicalSortStream", () => {
       base: root,
     });
 
-    const mergeCommit = makeMerge(branch1, branch2);
+    const mergeNode = makeMerge(branch1, branch2);
 
     const stream = newLocalOnlyStream();
-    await Promise.all(branch1.map((commit) => stream.write(commit)));
+    await Promise.all(branch1.map((node) => stream.write(node)));
 
-    const mergeRes = await stream.write(mergeCommit);
+    const mergeRes = await stream.write(mergeNode);
     expect(mergeRes.length).toEqual(0);
 
     // this is in order, but not enought to resolve the merge
@@ -185,7 +190,7 @@ describe("TopologicalSortStream", () => {
     const branch2Res2 = await stream.write(branch2[1]);
     expect(branch2Res2.length).toEqual(2);
     expect(branch2Res2[0].id()).toEqual(branch2[1].id());
-    expect(branch2Res2[1].id()).toEqual(mergeCommit.id());
+    expect(branch2Res2[1].id()).toEqual(mergeNode.id());
   });
 
   it("emits entire graph in topological order (no cache invalidation, unscheduled)", async () => {
@@ -222,7 +227,6 @@ describe("TopologicalSortStream", () => {
       fc.asyncProperty(new DAGArb(), fc.scheduler(), async (dag, s) => {
         const cache = new CacheWithInvalidation<IntNode>(10);
 
-        // THIS is where we need to schedule I think
         const fetchItem = async (id: string) => {
           return cache.getFromRepo(id);
         };

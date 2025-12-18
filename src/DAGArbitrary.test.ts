@@ -20,7 +20,6 @@ const noCycles = (g: IntDAG): boolean => {
     for (const edges of adjacencies.values()) {
       edges.delete(leafId);
     }
-    // OH we need to filter out any adjacencies for the leaf. so any node where node -> leaf, needs to have leaf removed
     nodeIds.splice(nextLeafIdx, 1);
   }
 

@@ -11,18 +11,18 @@ export interface NodeCache<T extends DAGNode<unknown>> {
 }
 
 /**
- * TopologicalCommitStream allows you to write commits. If the
- * commit was in topological order, it will be returned in the result,
- * along with possibly other commits that had previously received
+ * TopologicalSortStream allows you to write nodes. If the
+ * node was in topological order, it will be returned in the result,
+ * along with possibly other nodes that had previously received
  * out of order. The result array will be in topoligical order.
  *
- * If the commit was not in topological order, the result will
+ * If the node was not in topological order, the result will
  * be empty.
  */
 export class TopologicalSortStream<T extends DAGNode<unknown>> {
   private nodeCache: NodeCache<T>;
   private fetchNode: (ref: string) => Promise<T | undefined>;
-  // reverse index of missing dep -> commit
+  // reverse index of missing dep -> node
   private orphans: Map<string, Map<string, T>> = new Map<
     string,
     Map<string, T>
@@ -68,16 +68,16 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     return result;
   }
 
-  private async writeSingle(commit: T): Promise<T | undefined> {
-    this.inProcessing.add(commit.id());
-    const res = await this.writeSingleInner(commit);
-    this.inProcessing.delete(commit.id());
+  private async writeSingle(node: T): Promise<T | undefined> {
+    this.inProcessing.add(node.id());
+    const res = await this.writeSingleInner(node);
+    this.inProcessing.delete(node.id());
 
     return res;
   }
 
   /**
-   * Returns the commit if it is next in a valid top-sort.
+   * Returns the node if it is next in a valid top-sort.
    * Otherwise indexes it under the first missing ancestor
    */
   private async writeSingleInner(node: T): Promise<T | undefined> {
@@ -128,14 +128,11 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     return false;
   }
 
-  private recordOrphan(ancestorRef: string, commit: T) {
+  private recordOrphan(ancestorRef: string, node: T) {
     if (this.orphans.has(ancestorRef)) {
-      this.orphans.get(ancestorRef)!.set(commit.id(), commit);
+      this.orphans.get(ancestorRef)!.set(node.id(), node);
     } else {
-      this.orphans.set(
-        ancestorRef,
-        new Map<string, T>([[ancestorRef, commit]])
-      );
+      this.orphans.set(ancestorRef, new Map<string, T>([[ancestorRef, node]]));
     }
   }
 }

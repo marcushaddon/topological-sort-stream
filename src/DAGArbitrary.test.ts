@@ -2,7 +2,7 @@ import * as fc from "fast-check";
 import { DAGArb, IntDAG } from "./DAGArbitrary";
 import { topologicallySorted } from "./TopologicalSortStream.test";
 
-const noCycles = (g: IntDAG): boolean => {
+export const noCycles = (g: IntDAG): boolean => {
   const adjacencies = g.getAdjacencies();
   const nodeIds = g.getNodeIds();
   while (nodeIds.length > 0) {

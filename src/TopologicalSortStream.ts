@@ -50,6 +50,7 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     const stack: T[] = [node];
     while (stack.length > 0) {
       const current = stack.pop()!;
+      // DING DING DING pt2, our children can be in processing!!!!!
       const children = this.orphans.get(current.id());
       if (!children || children.size === 0) {
         continue;
@@ -83,6 +84,7 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
   private async writeSingleInner(node: T): Promise<T | undefined> {
     const ancestors = node.ancestors();
     if (ancestors.length === 0) {
+      // DING DING DING, we could have a child in processing
       this.nodeCache.set(node.id(), node);
       return node;
     }

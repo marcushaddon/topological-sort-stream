@@ -30,12 +30,14 @@ export class IntNode implements DAGNode<number> {
   }
 }
 
+const MAX_SIZE = 10;
+
 export class IntDAG {
   private random: fc.Random;
   private nodeMap: Map<string, IntNode>;
   private topSortedNodes: IntNode[];
-  private shrinkStep: number;
-  private shrinkIdx = 0;
+  //   private shrinkStep: number;
+  private shrinkIdx: number;
   // mostly for testing the arb itself
 
   public getAdjacencies() {
@@ -60,13 +62,14 @@ export class IntDAG {
 
   constructor(random: fc.Random, bias: number | undefined) {
     this.random = random;
-    const count = random.nextInt(1, 4000);
+    const count = random.nextInt(1, MAX_SIZE);
     const nodes = new Array<IntNode>(count);
     for (let i = 0; i < count; i++) {
       nodes[i] = new IntNode(i);
     }
 
     this.topSortedNodes = nodes;
+    this.shrinkIdx = this.topSortedNodes.length - 1;
     this.nodeMap = new Map(
       this.topSortedNodes.map((node) => [node.id(), node])
     );
@@ -76,10 +79,10 @@ export class IntDAG {
     // as soon as it fails to repro, but that needs validating). This method
     // of shrinking is deterministic but less pathological than just
     // working from the front or back of the sort
-    this.shrinkStep = Math.abs(random.nextInt());
+    // this.shrinkStep = Math.abs(random.nextInt());
 
-    const IN_DEGREE_MAX = 5; // TODO: derive this from bias or something
-    const OUT_DEGREE_MAX = 5; // same
+    const IN_DEGREE_MAX = 1; // TODO: derive this from bias or something
+    const OUT_DEGREE_MAX = 1; // same
 
     // how can we
     const connectionProbability = bias ?? OUT_DEGREE_MAX / count; // really guessing here
@@ -110,13 +113,14 @@ export class IntDAG {
   public shrinkOnce() {
     // remove node and all edges
     // we should find a wa
-    this.shrinkIdx = (this.shrinkIdx + this.shrinkStep) % this.size;
+    // this.shrinkIdx = (this.shrinkIdx + this.shrinkStep) % this.size;
     // safety: should always have length > 1 due to canShrinkWithoutContext
     const toRemove = this.topSortedNodes.splice(this.shrinkIdx, 1)![0];
     this.nodeMap.delete(toRemove.id());
     for (const remaining of this.topSortedNodes) {
       remaining.removeAncestor(toRemove.val);
     }
+    this.shrinkIdx--;
   }
 
   public nodesShuffled(): IntNode[] {
@@ -136,8 +140,8 @@ export class DAGArb extends fc.Arbitrary<IntDAG> {
     return new fc.Value(new IntDAG(mrng, biasFactor), undefined);
   }
 
-  canShrinkWithoutContext(_value: unknown): _value is IntDAG {
-    return false; // todo
+  canShrinkWithoutContext(value: unknown): value is IntDAG {
+    return value instanceof IntDAG && value.size > 0;
   }
 
   shrink(

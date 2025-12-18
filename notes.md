@@ -1,0 +1,7 @@
+- DO WE NEED TO CHECK AGAIN EVEN IF OUR PROMISE RESOLVES TO NOTHING?
+- 106: `const seen = await this.hasSeen(ancestor);`
+- say we get a <- b <- c
+- a immediately gets added to seen
+- b calls line 106, but it hangs. in the meantime we get c
+- c calls 106, and it resolves before b's call
+- `hasSeen` does

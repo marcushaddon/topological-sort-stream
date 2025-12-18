@@ -213,7 +213,7 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2[1].id()).toEqual(join.id());
   });
 
-  it("PROPERTY: emits entire graph in topological order (no cache invalidation, unscheduled)", async () => {
+  it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
     await fc.assert(
       fc.asyncProperty(new DAGArb(), async (dag) => {
         // nodes are never evicted
@@ -286,13 +286,19 @@ describe("TopologicalSortStream", () => {
     }
   );
 
-  it("emits entire graph in topological order (with cache invalidation, scheduling)", async () => {
+  it("PROPERTRY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
       numRuns: 20,
       endOnFailure: true,
     });
   });
 
+  /**
+   * A case where the graph is a <- b.
+   * The nodes are written b, a without awaiting, and
+   * the call to `haveSeen(a)` (while processing b)
+   * does not resolve until after a has already been written.
+   */
   it("repro 1", async () => {
     await fc.assert(topolgicalSortProperty, {
       seed: -833764443,

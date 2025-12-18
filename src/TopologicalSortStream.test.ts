@@ -113,6 +113,22 @@ class CacheWithInvalidation<T extends DAGNode<unknown>>
   }
 }
 
+// utilitiy for splitting items into batches of specified
+// sizes given that sum(sizes) != items.length
+const makeBatches = <T>(items: T[], sizes: number[]): T[][] => {
+  let batchIdx = 0;
+  let itemIdx = 0;
+  const batches: T[][] = [];
+  while (itemIdx < items.length) {
+    const batchSize = sizes[batchIdx];
+    batches.push(items.slice(itemIdx, itemIdx + batchSize));
+    itemIdx += batchSize;
+    batchIdx = (batchIdx + 1) % sizes.length;
+  }
+
+  return batches;
+};
+
 describe("TopologicalSortStream", () => {
   it("linear events", async () => {
     const branch = makeBranch({
@@ -230,12 +246,11 @@ describe("TopologicalSortStream", () => {
     );
   });
 
-  const BATCH_SIZE = 10;
-
   const topolgicalSortProperty = fc.asyncProperty(
     new DAGArb(),
+    fc.array(fc.integer({ min: 1, max: 50 }), { minLength: 1, maxLength: 50 }),
     fc.scheduler(),
-    async (dag, s) => {
+    async (dag, batchSizes, s) => {
       const cache = new CacheWithInvalidation<IntNode>(10);
 
       const fetchItem = async (id: string) => {
@@ -254,11 +269,7 @@ describe("TopologicalSortStream", () => {
       const unorderedNodes = dag.nodesShuffled();
       const orderedNodes: IntNode[] = [];
 
-      const batches = [
-        ...new Array(Math.ceil(unorderedNodes.length / BATCH_SIZE)),
-      ].map((_, n) =>
-        unorderedNodes.slice(n * BATCH_SIZE, n * BATCH_SIZE + BATCH_SIZE)
-      );
+      const batches = makeBatches(unorderedNodes, batchSizes);
 
       for (const batch of batches) {
         for (const node of batch) {

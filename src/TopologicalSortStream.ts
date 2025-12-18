@@ -118,13 +118,13 @@ export class TopologicalSortStream<T extends DAGNode<unknown>> {
     return node;
   }
 
-  private async hasSeen(ref: string) {
-    if (this.nodeCache.has(ref)) {
+  private async hasSeen(id: string) {
+    if (this.nodeCache.has(id)) {
       return true;
     }
 
     // TODO: try/catch for actual errors
-    const fetchedRes = await this.fetchNode(ref);
+    const fetchedRes = await this.fetchNode(id);
     if (fetchedRes) {
       this.nodeCache.set(fetchedRes.id(), fetchedRes);
       return true;

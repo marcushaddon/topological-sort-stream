@@ -1,36 +1,27 @@
 import * as fc from "fast-check";
-import { TopologicalSortStream } from "./TopologicalSortStream";
-import type { DAGNode, NodeCache } from "./TopologicalSortStream";
-import { DAGArb, IntNode } from "./DAGArbitrary";
+import { ancestors, TopologicalSortStream } from "./CommitSortStream";
+import type { Commit, CommitCache } from "./CommitSortStream";
+import { CommitDAGArb } from "./CommitGraphArbitrary";
 
-export const topologicallySorted = (nodes: IntNode[]): boolean => {
-  while (nodes.length > 0) {
-    const first = nodes.shift()!;
-    if (first.ancestors().length > 0) {
+export const topologicallySorted = (commits: Commit[]): boolean => {
+  while (commits.length > 0) {
+    const first = commits.shift()!;
+    if (ancestors(first).length > 0) {
       return false;
     }
 
-    for (const node of nodes) {
-      node.removeAncestor(first.val);
+    for (const commit of commits) {
+      if (commit.baseRef === first.ref) {
+        commit.baseRef = undefined;
+      }
+      if (commit.mergeRef === first.ref) {
+        commit.mergeRef = undefined;
+      }
     }
   }
 
   return true;
 };
-
-const nodeImpl = (testNode: {
-  _id: string;
-  _ancestors: string[];
-}): DAGNode<string> => ({
-  ...testNode,
-  id() {
-    return testNode._id;
-  },
-  ancestors() {
-    return testNode._ancestors;
-  },
-  data: testNode._id,
-});
 
 export const makeBranch = ({
   name,
@@ -39,47 +30,43 @@ export const makeBranch = ({
 }: {
   name: string;
   length: number;
-  base?: DAGNode<string>;
-}): DAGNode<string>[] =>
-  [...Array(length)].reduce((branch: DAGNode<string>[], _, n) => {
+  base?: Commit;
+}): Commit[] =>
+  [...Array(length)].reduce((branch: Commit[], _, n) => {
     const prev = branch.length === 0 ? base : branch[branch.length - 1];
     return [
       ...branch,
-      nodeImpl({
-        _id: `${name}${n}`,
-        _ancestors: prev ? [prev.id()] : [],
-      }),
+      {
+        ref: `${name}${n}`,
+        baseRef: prev?.ref,
+      },
     ];
   }, []);
 
-export const joinBranches = (
-  ...branches: DAGNode<string>[][]
-): DAGNode<string> => {
-  if (branches.length < 2) {
-    throw new Error("Must join at least 2 branches");
-  }
-  if (branches.some((branch) => branch.length === 0)) {
+export const joinBranches = (a: Commit[], b: Commit[]): Commit => {
+  if ([a, b].some((branch) => branch.length === 0)) {
     throw new Error("Cant join empty branches");
   }
 
-  const heads = branches.map((branch) => branch[branch.length - 1]);
+  const [aHead, bHead] = [a, b].map((branch) => branch[branch.length - 1]);
 
-  const joinId = heads.map((head) => head.id()).join("+");
-  return nodeImpl({
-    _id: `merge(${joinId})`,
-    _ancestors: heads.map((head) => head.id()),
-  });
+  const joinId = `${aHead.ref}+${bHead.ref}}`;
+
+  return {
+    ref: `merge(${joinId})`,
+    baseRef: aHead.ref,
+    mergeRef: bHead.ref,
+    main: false,
+  };
 };
 
 const newLocalOnlyStream = () =>
   new TopologicalSortStream(new Map(), async () => undefined);
 
-class CacheWithInvalidation<T extends DAGNode<unknown>>
-  implements NodeCache<T>
-{
+class CacheWithInvalidation implements CommitCache {
   private capacity: number;
-  private cached = new Map<string, T>();
-  private repo = new Map<string, T>();
+  private cached = new Map<string, Commit>();
+  private repo = new Map<string, Commit>();
 
   constructor(capacity: number) {
     this.capacity = capacity;
@@ -93,20 +80,20 @@ class CacheWithInvalidation<T extends DAGNode<unknown>>
     return this.cached.delete(id);
   }
 
-  public set(id: string, node: T) {
+  public set(id: string, node: Commit) {
     this.cached.set(id, node);
     while (this.cached.size > this.capacity) {
       // SAFETY: as long as capacity is > 0, then size > capcity
       // ensures next entry is defined
       const oldest = this.cached.entries().next()!.value![1];
-      this.cached.delete(oldest.id());
-      this.repo.set(oldest.id(), oldest);
+      this.cached.delete(oldest.ref);
+      this.repo.set(oldest.ref, oldest);
     }
 
     return this;
   }
 
-  public getFromRepo(id: string): T | undefined {
+  public getFromRepo(id: string): Commit | undefined {
     const res = this.repo.get(id);
 
     return res;
@@ -144,13 +131,13 @@ describe("TopologicalSortStream", () => {
     // each write op immediately resolves to the input,
     // as they are in order
     expect(firstRes.length).toEqual(1);
-    expect(firstRes[0].id()).toEqual(branch[0].id());
+    expect(firstRes[0].ref).toEqual(branch[0].ref);
 
     expect(secondRes.length).toEqual(1);
-    expect(secondRes[0].id()).toEqual(branch[1].id());
+    expect(secondRes[0].ref).toEqual(branch[1].ref);
 
     expect(thirdRes.length).toEqual(1);
-    expect(thirdRes[0].id()).toEqual(branch[2].id());
+    expect(thirdRes[0].ref).toEqual(branch[2].ref);
   });
 
   it("handles one out of order linear", async () => {
@@ -169,14 +156,14 @@ describe("TopologicalSortStream", () => {
 
     // first write op is no longer orphaned
     expect(firstRes.length).toEqual(2);
-    expect(firstRes[0].id()).toEqual(branch[0].id());
-    expect(firstRes[1].id()).toEqual(branch[1].id());
+    expect(firstRes[0].ref).toEqual(branch[0].ref);
+    expect(firstRes[1].ref).toEqual(branch[1].ref);
 
     const thirdRes = await stream.write(branch[2]);
 
     // in order again
     expect(thirdRes.length).toEqual(1);
-    expect(thirdRes[0].id()).toEqual(branch[2].id());
+    expect(thirdRes[0].ref).toEqual(branch[2].ref);
   });
 
   it("handles out of order join", async () => {
@@ -209,30 +196,30 @@ describe("TopologicalSortStream", () => {
     const branch2Res2 = await stream.write(branch2[1]);
     // in order, AND recovers the join
     expect(branch2Res2.length).toEqual(2);
-    expect(branch2Res2[0].id()).toEqual(branch2[1].id());
-    expect(branch2Res2[1].id()).toEqual(join.id());
+    expect(branch2Res2[0].ref).toEqual(branch2[1].ref);
+    expect(branch2Res2[1].ref).toEqual(join.ref);
   });
 
   it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
     await fc.assert(
-      fc.asyncProperty(new DAGArb(), async (dag) => {
+      fc.asyncProperty(new CommitDAGArb(), async (dag) => {
         // nodes are never evicted
-        const cache = new Map<string, IntNode>();
+        const cache = new Map<string, Commit>();
         const fetchItem = jest
           .fn()
           .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
 
-        const uut = new TopologicalSortStream<IntNode>(cache, fetchItem);
-        const orderedNodes: IntNode[] = [];
+        const uut = new TopologicalSortStream(cache, fetchItem);
+        const orderedNodes: Commit[] = [];
 
         // example usage where orderedNodes represents our 'sink'
         // that assumes topological order
-        const writeInOrder = async (node: IntNode) => {
+        const writeInOrder = async (node: Commit) => {
           const orderedBatch = await uut.write(node);
           orderedNodes.push(...orderedBatch);
         };
 
-        const unorderedNodes = dag.nodesShuffled();
+        const unorderedNodes = dag.commitsShuffled();
 
         // consumer writes without waiting for results
         await Promise.all(unorderedNodes.map((node) => writeInOrder(node)));
@@ -247,11 +234,12 @@ describe("TopologicalSortStream", () => {
   });
 
   const topolgicalSortProperty = fc.asyncProperty(
-    new DAGArb(),
+    new CommitDAGArb(),
+    fc.integer({ min: 0, max: 1000 }),
     fc.array(fc.integer({ min: 1, max: 50 }), { minLength: 1, maxLength: 50 }),
     fc.scheduler(),
-    async (dag, batchSizes, s) => {
-      const cache = new CacheWithInvalidation<IntNode>(10);
+    async (dag, cacheSize, batchSizes, s) => {
+      const cache = new CacheWithInvalidation(cacheSize);
 
       const fetchItem = async (id: string) => {
         return cache.getFromRepo(id);
@@ -259,15 +247,15 @@ describe("TopologicalSortStream", () => {
 
       const fetchItemScheduled = (id: string) => s.schedule(fetchItem(id));
 
-      const uut = new TopologicalSortStream<IntNode>(cache, fetchItemScheduled);
+      const uut = new TopologicalSortStream(cache, fetchItemScheduled);
 
-      const writeInOrder = async (node: IntNode) => {
+      const writeInOrder = async (node: Commit) => {
         const orderedBatch = await uut.write(node);
         orderedNodes.push(...orderedBatch);
       };
 
-      const unorderedNodes = dag.nodesShuffled();
-      const orderedNodes: IntNode[] = [];
+      const unorderedNodes = dag.commitsShuffled();
+      const orderedNodes: Commit[] = [];
 
       const batches = makeBatches(unorderedNodes, batchSizes);
 
@@ -288,7 +276,7 @@ describe("TopologicalSortStream", () => {
 
   it("PROPERTRY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 20,
+      numRuns: 100,
       endOnFailure: true,
     });
   });

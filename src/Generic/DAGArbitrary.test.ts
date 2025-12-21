@@ -33,9 +33,8 @@ describe("DAGArb", () => {
       return shuffled.length === dag.size && !topologicallySorted(shuffled);
     });
   });
-  it("will create branchs", () => {
-    // are there conditions under which we MUST create branchs? can we make it so?
-  });
+
+  it.todo("is topologically sorted");
 
   it("does not create cycles", () => {
     fc.assert(

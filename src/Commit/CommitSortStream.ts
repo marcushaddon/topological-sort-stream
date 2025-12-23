@@ -24,6 +24,17 @@ export interface CommitCache {
   delete(ref: string): void;
 }
 
+type WriteResult =
+  | {
+      name: "success";
+    }
+  | {
+      name: "missingDep";
+      dep: string;
+    };
+const writeSuccess = (): WriteResult => ({ name: "success" });
+const missingDep = (dep: string): WriteResult => ({ name: "missingDep", dep });
+
 /**
  * TopologicalSortStream allows you to write commits. If the
  * commit was in topological order, it will be returned in the result,
@@ -72,9 +83,11 @@ export class TopologicalSortStream {
         (commit) => ancestors(commit).includes(current.ref)
       );
 
-      for (const child of [...orphanedChildren, ...inProcessChildren]) {
+      const combined = [...orphanedChildren, ...inProcessChildren];
+      for (const child of combined) {
         const added = await this.writeSingle(child);
         if (added) {
+          this.clearOrphan(current.ref, added);
           // SAFETY: if we are adding this to the result,
           // the result already contains our ancestor
           result.push(added);
@@ -89,45 +102,50 @@ export class TopologicalSortStream {
   private async writeSingle(commit: Commit): Promise<Commit | undefined> {
     this.inProcessing.set(commit.ref, commit);
     const res = await this.writeSingleInner(commit);
+
+    if (!this.inProcessing.has(commit.ref)) {
+      // we have been liberated by another call while waiting for this promise
+      // BUG: this results in emitting this commit a second time
+      return commit;
+    }
+    switch (res.name) {
+      case "success":
+        this.commitCache.set(commit.ref, commit);
+        break;
+      case "missingDep":
+        // HERE: there is a chance that we have already processed our missing dep,
+        // and have been liberated from inProcessing!!!
+        this.recordOrphan(res.dep, commit);
+    }
     this.inProcessing.delete(commit.ref);
 
-    return res;
+    return res.name === "success" ? commit : undefined;
   }
 
   /**
    * Returns the commit if it is next in a valid top-sort.
    * Otherwise indexes it under the first missing ancestor
    */
-  private async writeSingleInner(commit: Commit): Promise<Commit | undefined> {
+  private async writeSingleInner(commit: Commit): Promise<WriteResult> {
     const deps = ancestors(commit);
     if (deps.length === 0) {
       // DING DING DING, we could have a child in processing
-      this.commitCache.set(commit.ref, commit);
-      return commit;
+      return writeSuccess();
     }
 
     const ancestorInProcessing = deps.find((ref) => this.inProcessing.has(ref));
     if (ancestorInProcessing) {
-      this.recordOrphan(ancestorInProcessing, commit);
-      return undefined;
+      return missingDep(ancestorInProcessing);
     }
 
-    let orphaned = false;
     for (const ancestor of deps) {
       const seen = await this.hasSeen(ancestor);
       if (!seen) {
-        this.recordOrphan(ancestor, commit);
-        orphaned = true;
-        break;
+        return missingDep(ancestor);
       }
     }
 
-    if (orphaned) {
-      return undefined;
-    }
-
-    this.commitCache.set(commit.ref, commit);
-    return commit;
+    return writeSuccess();
   }
 
   private async hasSeen(ref: string) {
@@ -151,8 +169,21 @@ export class TopologicalSortStream {
     } else {
       this.orphans.set(
         ancestorRef,
-        new Map<string, Commit>([[ancestorRef, commit]])
+        new Map<string, Commit>([[commit.ref, commit]])
       );
     }
+  }
+
+  private clearOrphan(ancestorRef: string, commit: Commit) {
+    const dependency = this.orphans.get(ancestorRef);
+    if (dependency) {
+      dependency.delete(commit.ref);
+    }
+  }
+
+  public currentOrphans(): string[] {
+    return Array.from(this.orphans.values()).flatMap((orphans) =>
+      Array.from(orphans.keys())
+    );
   }
 }

@@ -85,6 +85,10 @@ class CacheWithInvalidation<T extends DAGNode<unknown>>
     this.capacity = capacity;
   }
 
+  public get size() {
+    return this.cached.size;
+  }
+
   public has(id: string) {
     return this.cached.has(id);
   }
@@ -282,6 +286,7 @@ describe("TopologicalSortStream", () => {
         await s.waitIdle();
       }
 
+      expect(cache.size).toEqual(0);
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
     }

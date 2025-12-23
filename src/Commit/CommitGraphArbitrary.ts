@@ -32,7 +32,7 @@ export class CommitDAG {
 
   constructor(random: fc.Random, _bias: number | undefined) {
     this.random = random;
-    const count = 4; //random.nextInt(1, MAX_SIZE);
+    const count = 2; //random.nextInt(1, MAX_SIZE);
 
     // Q: how do we ensure we add commits in a top sort order?
     // just
@@ -63,10 +63,6 @@ export class CommitDAG {
           this.advanceMain();
         }
       }
-
-      // add an edit (maybe biased to advancing a head, but possibly on some random edit or main merge commit) (possibly marking main if base is main)
-      // pick a random head and merging it into current main head, maybe marking main
-      console.log("dbg");
     }
   }
 

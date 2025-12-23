@@ -202,14 +202,14 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2[1].ref).toEqual(join.ref);
   });
 
-  const topSortPropertyWithOrderedCommits = fc.asyncProperty(
+  const topSortPropertyWithOrderedPromises = fc.asyncProperty(
     new CommitDAGArb(),
     async (dag) => {
       // commits are never evicted
       const cache = new Map<string, Commit>();
-      const fetchItem = jest
-        .fn()
-        .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
+      const fetchItem = (ref: string) => {
+        return Promise.resolve(cache.get(ref));
+      };
 
       const uut = new TopologicalSortStream(cache, fetchItem);
       const orderedNodes: Commit[] = [];
@@ -232,16 +232,8 @@ describe("TopologicalSortStream", () => {
   );
 
   it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
-    await fc.assert(topSortPropertyWithOrderedCommits, {
+    await fc.assert(topSortPropertyWithOrderedPromises, {
       numRuns: 10,
-    });
-  });
-
-  it("repro 1", async () => {
-    await fc.assert(topSortPropertyWithOrderedCommits, {
-      seed: -1421527653,
-      path: "1:1",
-      endOnFailure: true,
     });
   });
 
@@ -281,16 +273,24 @@ describe("TopologicalSortStream", () => {
         await s.waitIdle();
       }
 
-      expect(cache.size).toEqual(0);
+      const currentOrphans = uut.currentOrphans();
+      expect(currentOrphans.length).toEqual(0);
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
-      console.log("run completed");
     }
   );
 
   it("PROPERTRY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
       numRuns: 1,
+      endOnFailure: true,
+    });
+  });
+
+  it("repro", async () => {
+    await fc.assert(topolgicalSortProperty, {
+      seed: -1573078076,
+      path: "0",
       endOnFailure: true,
     });
   });

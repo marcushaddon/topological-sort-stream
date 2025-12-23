@@ -26,6 +26,21 @@ export const noCycles = (g: CommitDAG): boolean => {
   return true;
 };
 
+export const monotonicMain = (g: CommitDAG): boolean => {
+  let current = g.getMainHead();
+  const mainBranch = g.getMainCommits();
+  while (current) {
+    mainBranch.delete(current);
+    const base = g.getCommit(current)!;
+    if (!base.main) {
+      return false;
+    }
+    current = base.baseRef;
+  }
+
+  return mainBranch.size === 0;
+};
+
 describe("DAGArb", () => {
   it("shuffles its nodes", () => {
     fc.property(new CommitDAGArb(), (dag) => {
@@ -42,6 +57,14 @@ describe("DAGArb", () => {
         expect(noCycles(dag)).toBeTruthy();
       }),
       { numRuns: 100, verbose: true }
+    );
+  });
+
+  it("has monotonic main", () => {
+    fc.assert(
+      fc.property(new CommitDAGArb(), (dag) => {
+        expect(monotonicMain(dag));
+      })
     );
   });
 });

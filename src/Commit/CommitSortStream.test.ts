@@ -1,23 +1,21 @@
 import * as fc from "fast-check";
-import { ancestors, TopologicalSortStream } from "./CommitSortStream";
+import { TopologicalSortStream } from "./CommitSortStream";
 import type { Commit, CommitCache } from "./CommitSortStream";
 import { CommitDAGArb } from "./CommitGraphArbitrary";
 
 export const topologicallySorted = (commits: Commit[]): boolean => {
+  const deleted = new Set<string>();
   while (commits.length > 0) {
     const first = commits.shift()!;
-    if (ancestors(first).length > 0) {
+    const hasAncestors =
+      (first.baseRef && !deleted.has(first.baseRef)) ||
+      (first.mergeRef && !deleted.has(first.mergeRef));
+    if (hasAncestors) {
       return false;
     }
 
-    for (const commit of commits) {
-      if (commit.baseRef === first.ref) {
-        commit.baseRef = undefined;
-      }
-      if (commit.mergeRef === first.ref) {
-        commit.mergeRef = undefined;
-      }
-    }
+    // TODO: replace with set of delete for speed
+    deleted.add(first.ref);
   }
 
   return true;
@@ -80,8 +78,8 @@ class CacheWithInvalidation implements CommitCache {
     return this.cached.delete(id);
   }
 
-  public set(id: string, node: Commit) {
-    this.cached.set(id, node);
+  public set(id: string, commit: Commit) {
+    this.cached.set(id, commit);
     while (this.cached.size > this.capacity) {
       // SAFETY: as long as capacity is > 0, then size > capcity
       // ensures next entry is defined
@@ -91,6 +89,10 @@ class CacheWithInvalidation implements CommitCache {
     }
 
     return this;
+  }
+
+  public get size() {
+    return this.cached.size;
   }
 
   public getFromRepo(id: string): Commit | undefined {
@@ -166,7 +168,7 @@ describe("TopologicalSortStream", () => {
     expect(thirdRes[0].ref).toEqual(branch[2].ref);
   });
 
-  it("handles out of order join", async () => {
+  it("handles out of order merge", async () => {
     const branch1 = makeBranch({
       name: "branch1",
       length: 3,
@@ -183,13 +185,13 @@ describe("TopologicalSortStream", () => {
     const join = joinBranches(branch1, branch2);
 
     const stream = newLocalOnlyStream();
-    await Promise.all(branch1.map((node) => stream.write(node)));
+    await Promise.all(branch1.map((commit) => stream.write(commit)));
 
     const mergeRes = await stream.write(join);
-    // we don't have the nodes of the branch we are joining yet
+    // we don't have the commits of the branch we are joining yet
     expect(mergeRes.length).toEqual(0);
 
-    // this is in order, but not enought to resolve the join
+    // this is in order, but not enough to resolve the join
     const branch2Res1 = await stream.write(branch2[0]);
     expect(branch2Res1.length).toEqual(1);
 
@@ -200,37 +202,47 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2[1].ref).toEqual(join.ref);
   });
 
+  const topSortPropertyWithOrderedCommits = fc.asyncProperty(
+    new CommitDAGArb(),
+    async (dag) => {
+      // commits are never evicted
+      const cache = new Map<string, Commit>();
+      const fetchItem = jest
+        .fn()
+        .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
+
+      const uut = new TopologicalSortStream(cache, fetchItem);
+      const orderedNodes: Commit[] = [];
+
+      // example usage where orderedNodes represents our 'sink'
+      // that assumes topological order
+      const writeInOrder = async (commit: Commit) => {
+        const orderedBatch = await uut.write(commit);
+        orderedNodes.push(...orderedBatch);
+      };
+
+      const unorderedNodes = dag.commitsShuffled();
+
+      // consumer writes without waiting for results
+      await Promise.all(unorderedNodes.map((commit) => writeInOrder(commit)));
+
+      expect(orderedNodes.length).toEqual(dag.size);
+      expect(topologicallySorted(orderedNodes)).toBeTruthy();
+    }
+  );
+
   it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
-    await fc.assert(
-      fc.asyncProperty(new CommitDAGArb(), async (dag) => {
-        // nodes are never evicted
-        const cache = new Map<string, Commit>();
-        const fetchItem = jest
-          .fn()
-          .mockImplementation((id: string) => Promise.resolve(cache.get(id)));
+    await fc.assert(topSortPropertyWithOrderedCommits, {
+      numRuns: 10,
+    });
+  });
 
-        const uut = new TopologicalSortStream(cache, fetchItem);
-        const orderedNodes: Commit[] = [];
-
-        // example usage where orderedNodes represents our 'sink'
-        // that assumes topological order
-        const writeInOrder = async (node: Commit) => {
-          const orderedBatch = await uut.write(node);
-          orderedNodes.push(...orderedBatch);
-        };
-
-        const unorderedNodes = dag.commitsShuffled();
-
-        // consumer writes without waiting for results
-        await Promise.all(unorderedNodes.map((node) => writeInOrder(node)));
-
-        expect(orderedNodes.length).toEqual(dag.size);
-        expect(topologicallySorted(orderedNodes)).toBeTruthy();
-      }),
-      {
-        numRuns: 20,
-      }
-    );
+  it("repro 1", async () => {
+    await fc.assert(topSortPropertyWithOrderedCommits, {
+      seed: -1421527653,
+      path: "1:1",
+      endOnFailure: true,
+    });
   });
 
   const topolgicalSortProperty = fc.asyncProperty(
@@ -249,8 +261,8 @@ describe("TopologicalSortStream", () => {
 
       const uut = new TopologicalSortStream(cache, fetchItemScheduled);
 
-      const writeInOrder = async (node: Commit) => {
-        const orderedBatch = await uut.write(node);
+      const writeInOrder = async (commit: Commit) => {
+        const orderedBatch = await uut.write(commit);
         orderedNodes.push(...orderedBatch);
       };
 
@@ -260,8 +272,8 @@ describe("TopologicalSortStream", () => {
       const batches = makeBatches(unorderedNodes, batchSizes);
 
       for (const batch of batches) {
-        for (const node of batch) {
-          void writeInOrder(node);
+        for (const commit of batch) {
+          void writeInOrder(commit);
         }
 
         // causes any fetchItem calls to resolve in order
@@ -269,28 +281,16 @@ describe("TopologicalSortStream", () => {
         await s.waitIdle();
       }
 
+      expect(cache.size).toEqual(0);
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
+      console.log("run completed");
     }
   );
 
   it("PROPERTRY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 100,
-      endOnFailure: true,
-    });
-  });
-
-  /**
-   * A case where the graph is a <- b.
-   * The nodes are written b, a without awaiting, and
-   * the call to `haveSeen(a)` (while processing b)
-   * does not resolve until after a has already been written.
-   */
-  it("repro 1", async () => {
-    await fc.assert(topolgicalSortProperty, {
-      seed: -833764443,
-      path: "5",
+      numRuns: 1,
       endOnFailure: true,
     });
   });

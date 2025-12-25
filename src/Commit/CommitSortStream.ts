@@ -35,6 +35,11 @@ type WriteResult =
 const writeSuccess = (): WriteResult => ({ name: "success" });
 const missingDep = (dep: string): WriteResult => ({ name: "missingDep", dep });
 
+type WriteSingleResult =
+  | { name: "success"; commit: Commit }
+  | { name: "orphaned"; commit: Commit }
+  | { name: "noop" };
+
 /**
  * TopologicalSortStream allows you to write commits. If the
  * commit was in topological order, it will be returned in the result,
@@ -67,15 +72,15 @@ export class TopologicalSortStream {
    */
   public async write(commit: Commit): Promise<Commit[]> {
     const initialResult = await this.writeSingle(commit);
-    if (!initialResult) {
+    if (initialResult.name !== "success") {
       return [];
     }
-    const result: Commit[] = [initialResult];
+    const result: Commit[] = [initialResult.commit];
 
     const stack: Commit[] = [commit];
     while (stack.length > 0) {
       const current = stack.pop()!;
-      // DING DING DING pt2, our children can be in processing!!!!!
+
       const orphanedChildren = [
         ...(this.orphans.get(current.ref)?.values() ?? []),
       ];
@@ -85,41 +90,40 @@ export class TopologicalSortStream {
 
       const combined = [...orphanedChildren, ...inProcessChildren];
       for (const child of combined) {
-        const added = await this.writeSingle(child);
-        if (added) {
-          this.clearOrphan(current.ref, added);
+        const childResult = await this.writeSingle(child);
+        if (childResult.name === "success") {
+          this.clearOrphan(current.ref, childResult.commit);
           // SAFETY: if we are adding this to the result,
           // the result already contains our ancestor
-          result.push(added);
-          stack.push(added);
+          result.push(childResult.commit);
+          stack.push(childResult.commit);
         }
+        // If noop or orphaned, we don't add to result
       }
     }
 
     return result;
   }
 
-  private async writeSingle(commit: Commit): Promise<Commit | undefined> {
+  private async writeSingle(commit: Commit): Promise<WriteSingleResult> {
     this.inProcessing.set(commit.ref, commit);
     const res = await this.writeSingleInner(commit);
 
     if (!this.inProcessing.has(commit.ref)) {
-      // we have been liberated by another call while waiting for this promise
-      // BUG: this results in emitting this commit a second time
-      return commit;
+      // We have been liberated by another call while waiting for this promise.
+      // Another concurrent call successfully processed this commit, so we take no action.
+      return { name: "noop" };
     }
     switch (res.name) {
       case "success":
         this.commitCache.set(commit.ref, commit);
-        break;
+        this.inProcessing.delete(commit.ref);
+        return { name: "success", commit };
       case "missingDep":
-        // HERE: there is a chance that we have already processed our missing dep,
-        // and have been liberated from inProcessing!!!
         this.recordOrphan(res.dep, commit);
+        this.inProcessing.delete(commit.ref);
+        return { name: "orphaned", commit };
     }
-    this.inProcessing.delete(commit.ref);
-
-    return res.name === "success" ? commit : undefined;
   }
 
   /**

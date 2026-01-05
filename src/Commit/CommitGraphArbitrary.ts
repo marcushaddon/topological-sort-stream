@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { Commit } from "./CommitSortStream";
 
-// const MAX_SIZE = 10;
+const MAX_SIZE = 3;
 
 export class CommitDAG {
   private random: fc.Random;
@@ -32,7 +32,7 @@ export class CommitDAG {
 
   constructor(random: fc.Random, _bias: number | undefined) {
     this.random = random;
-    const count = 2; //random.nextInt(1, MAX_SIZE);
+    const count = random.nextInt(1, MAX_SIZE);
 
     // Q: how do we ensure we add commits in a top sort order?
     // just

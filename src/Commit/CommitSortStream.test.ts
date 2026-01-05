@@ -280,17 +280,17 @@ describe("TopologicalSortStream", () => {
     }
   );
 
-  it("PROPERTRY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
+  it("PROPERTY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 1,
+      numRuns: 10,
       endOnFailure: true,
     });
   });
 
   it("repro", async () => {
     await fc.assert(topolgicalSortProperty, {
-      seed: -1573078076,
-      path: "0",
+      seed: -425561270,
+      path: "5",
       endOnFailure: true,
     });
   });

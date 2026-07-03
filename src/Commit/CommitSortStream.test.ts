@@ -282,15 +282,16 @@ describe("TopologicalSortStream", () => {
 
   it("PROPERTY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 10,
+      numRuns: 10000,
       endOnFailure: true,
     });
   });
 
-  it("repro", async () => {
+  // 4 emitted twice
+  it("repro 1", async () => {
     await fc.assert(topolgicalSortProperty, {
-      seed: -425561270,
-      path: "5",
+      seed: 911344591,
+      path: "5956",
       endOnFailure: true,
     });
   });

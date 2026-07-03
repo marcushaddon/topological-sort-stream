@@ -53,11 +53,7 @@ export class TopologicalSortStream {
   private commitCache: CommitCache;
   private lookupCommit: (ref: string) => Promise<Commit | undefined>;
   // reverse index of missing dep -> commit
-  private orphans: Map<string, Map<string, Commit>> = new Map<
-    string,
-    Map<string, Commit>
-  >();
-  private inProcessing = new Map<string, Commit>();
+  private unresolvedCommits: Map<string, Commit> = new Map<string, Commit>();
 
   public constructor(
     itemCache: CommitCache = new Map<string, Commit>(),
@@ -81,18 +77,14 @@ export class TopologicalSortStream {
     while (stack.length > 0) {
       const current = stack.pop()!;
 
-      const orphanedChildren = [
-        ...(this.orphans.get(current.ref)?.values() ?? []),
-      ];
-      const inProcessChildren = [...this.inProcessing.values()].filter(
-        (commit) => ancestors(commit).includes(current.ref)
-      );
+      const orphanedChildren = Array.from(
+        this.unresolvedCommits.values()
+      ).filter((c) => ancestors(c).find((a) => a === current.ref));
 
-      const combined = [...orphanedChildren, ...inProcessChildren];
-      for (const child of combined) {
+      for (const child of orphanedChildren) {
         const childResult = await this.writeSingle(child);
         if (childResult.name === "success") {
-          this.clearOrphan(current.ref, childResult.commit);
+          this.clearOrphan(childResult.commit);
           // SAFETY: if we are adding this to the result,
           // the result already contains our ancestor
           result.push(childResult.commit);
@@ -106,22 +98,15 @@ export class TopologicalSortStream {
   }
 
   private async writeSingle(commit: Commit): Promise<WriteSingleResult> {
-    this.inProcessing.set(commit.ref, commit);
+    this.recordOrphan(commit);
     const res = await this.writeSingleInner(commit);
 
-    if (!this.inProcessing.has(commit.ref)) {
-      // We have been liberated by another call while waiting for this promise.
-      // Another concurrent call successfully processed this commit, so we take no action.
-      return { name: "noop" };
-    }
     switch (res.name) {
       case "success":
         this.commitCache.set(commit.ref, commit);
-        this.inProcessing.delete(commit.ref);
+        this.clearOrphan(commit);
         return { name: "success", commit };
       case "missingDep":
-        this.recordOrphan(res.dep, commit);
-        this.inProcessing.delete(commit.ref);
         return { name: "orphaned", commit };
     }
   }
@@ -135,11 +120,6 @@ export class TopologicalSortStream {
     if (deps.length === 0) {
       // DING DING DING, we could have a child in processing
       return writeSuccess();
-    }
-
-    const ancestorInProcessing = deps.find((ref) => this.inProcessing.has(ref));
-    if (ancestorInProcessing) {
-      return missingDep(ancestorInProcessing);
     }
 
     for (const ancestor of deps) {
@@ -167,27 +147,15 @@ export class TopologicalSortStream {
     return false;
   }
 
-  private recordOrphan(ancestorRef: string, commit: Commit) {
-    if (this.orphans.has(ancestorRef)) {
-      this.orphans.get(ancestorRef)!.set(commit.ref, commit);
-    } else {
-      this.orphans.set(
-        ancestorRef,
-        new Map<string, Commit>([[commit.ref, commit]])
-      );
-    }
+  private recordOrphan(commit: Commit) {
+    this.unresolvedCommits.set(commit.ref, commit);
   }
 
-  private clearOrphan(ancestorRef: string, commit: Commit) {
-    const dependency = this.orphans.get(ancestorRef);
-    if (dependency) {
-      dependency.delete(commit.ref);
-    }
+  private clearOrphan(commit: Commit) {
+    this.unresolvedCommits.delete(commit.ref);
   }
 
   public currentOrphans(): string[] {
-    return Array.from(this.orphans.values()).flatMap((orphans) =>
-      Array.from(orphans.keys())
-    );
+    return Array.from(this.unresolvedCommits.keys());
   }
 }

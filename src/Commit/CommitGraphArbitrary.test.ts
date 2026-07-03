@@ -1,6 +1,8 @@
 import * as fc from "fast-check";
 import { CommitDAGArb, CommitDAG } from "./CommitGraphArbitrary";
 import { topologicallySorted } from "./CommitSortStream.test";
+import { Commit } from "./CommitSortStream";
+import { walkBaseRefs } from "./CommitGraphTools";
 
 export const noCycles = (g: CommitDAG): boolean => {
   const adjacencies = g.getAdjacencies();
@@ -41,6 +43,32 @@ export const monotonicMain = (g: CommitDAG): boolean => {
   return mainBranch.size === 0;
 };
 
+export const mergeIsOk = (merge: Commit, g: CommitDAG): boolean => {
+  // a self merge is a merge where the baseRef is also the baseRef of the mergeRef
+  const base = g.getCommit(merge.baseRef!);
+  const mergee = g.getCommit(merge.mergeRef!);
+  const bothExist = !!base && !!mergee;
+  if (!bothExist) {
+    return false;
+  }
+  const oneIsMain = base?.main && !mergee?.main;
+  if (!oneIsMain) {
+    return false;
+  }
+
+  const mergeeResult = walkBaseRefs(mergee, g, (c) => c.main);
+  if (mergeeResult?.path.some((c) => !c.main && !!c.mergeRef)) {
+    return false;
+  }
+  const viableMergeRoot = walkBaseRefs(
+    base,
+    g,
+    (c) => c.ref === mergeeResult?.commit.ref
+  );
+
+  return !!viableMergeRoot;
+};
+
 describe("DAGArb", () => {
   it("shuffles its nodes", () => {
     fc.property(new CommitDAGArb(), (dag) => {
@@ -64,6 +92,19 @@ describe("DAGArb", () => {
     fc.assert(
       fc.property(new CommitDAGArb(), (dag) => {
         expect(monotonicMain(dag));
+      }),
+      {
+        numRuns: 100,
+      }
+    );
+  });
+
+  it("does not contain invalid merges", () => {
+    fc.assert(
+      fc.property(new CommitDAGArb(), (dag) => {
+        const merges = dag.filter((c) => !!c.mergeRef);
+        console.log(`graph has ${merges.length} merges`);
+        expect(merges.every((merge) => mergeIsOk(merge, dag)));
       })
     );
   });

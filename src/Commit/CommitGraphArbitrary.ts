@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { Commit } from "./CommitSortStream";
 
-const MAX_SIZE = 3;
+const MAX_SIZE = 10000;
 
 export class CommitDAG {
   private random: fc.Random;
@@ -49,7 +49,7 @@ export class CommitDAG {
       }
 
       const nextRand = random.nextDouble();
-      // TODO(marcus): dont waste iterations
+      // TODO(marcus): these probabilities need to scale with size of graph
       while (this.size < count) {
         if (nextRand < 0.25 && this.editHeads.size > 0) {
           this.maybeMergeHead();
@@ -223,6 +223,10 @@ export class CommitDAG {
       // two items being out of or in order
       return this.random.nextDouble() > 0.5 ? 1 : -1;
     });
+  }
+
+  public filter(pred: (c: Commit) => boolean): Commit[] {
+    return Array.from(this.allCommits.values()).filter(pred);
   }
 }
 

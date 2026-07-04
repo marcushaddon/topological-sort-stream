@@ -1,7 +1,5 @@
-- DO WE NEED TO CHECK AGAIN EVEN IF OUR PROMISE RESOLVES TO NOTHING?
-- 106: `const seen = await this.hasSeen(ancestor);`
-- say we get a <- b <- c
-- a immediately gets added to seen
-- b calls line 106, but it hangs. in the meantime we get c
-- c calls 106, and it resolves before b's call
-- `hasSeen` does
+TWHO BIG IDEAS:
+- remove cache as detail of stream, make that part of lookup
+- instead of doing DFS/BFS, just loop over backlock freeing who we can until we cant free anyone else BUT ALSO, for each item in the backlog, check other backlog entries first
+
+- ok do we need to put commits in jail as soon as they come in in case their parents are in flight? and then remember to remove them even if they pass the first check?

@@ -5,6 +5,20 @@ export interface Commit {
   main: boolean;
 }
 
+const deps = (c: Commit) =>
+  c.baseRef && c.mergeRef
+    ? [c.baseRef, c.mergeRef]
+    : c.baseRef
+      ? [c.baseRef]
+      : [];
+
+const printCommit = (c: Commit) =>
+  (c.mergeRef
+    ? `${c.mergeRef}+${c.baseRef}->`
+    : c.baseRef
+      ? `${c.baseRef}->`
+      : "|->") + c.ref;
+
 export const ancestors = (c: Commit): string[] => {
   const res: string[] = [];
   if (c.baseRef) {
@@ -40,6 +54,10 @@ type WriteSingleResult =
   | { name: "orphaned"; commit: Commit }
   | { name: "noop" };
 
+export interface ITopologicalSortStream {
+  write(commit: Commit): Promise<Commit[]>;
+}
+
 /**
  * TopologicalSortStream allows you to write commits. If the
  * commit was in topological order, it will be returned in the result,
@@ -57,7 +75,7 @@ export class TopologicalSortStream {
 
   public constructor(
     itemCache: CommitCache = new Map<string, Commit>(),
-    lookupCommit: (ref: string) => Promise<Commit | undefined>
+    lookupCommit: (ref: string) => Promise<Commit | undefined>,
   ) {
     this.commitCache = itemCache;
     this.lookupCommit = lookupCommit;
@@ -78,7 +96,7 @@ export class TopologicalSortStream {
       const current = stack.pop()!;
 
       const orphanedChildren = Array.from(
-        this.unresolvedCommits.values()
+        this.unresolvedCommits.values(),
       ).filter((c) => ancestors(c).find((a) => a === current.ref));
 
       for (const child of orphanedChildren) {
@@ -157,5 +175,190 @@ export class TopologicalSortStream {
 
   public currentOrphans(): string[] {
     return Array.from(this.unresolvedCommits.keys());
+  }
+}
+
+//
+export class TopologicalSortStream2 {
+  private lookup: (ref: string) => Promise<Commit | undefined>;
+  // reverse index of missing dep -> commit
+
+  private prison = new CommitJail();
+
+  private tasks = new TaskSerializer<Commit, Commit[]>(
+    this.writeInner.bind(this),
+  );
+
+  public constructor(lookup: (ref: string) => Promise<Commit | undefined>) {
+    this.lookup = lookup;
+  }
+
+  public currentOrphans(): string[] {
+    return this.prison.contents();
+  }
+
+  public async write(commit: Commit): Promise<Commit[]> {
+    console.log(`Enqueueing ${printCommit(commit)}`);
+    const prom = this.tasks.add(commit);
+    console.log(`Eqneue'd ${printCommit(commit)}`);
+    return prom;
+  }
+
+  private async writeInner(commit: Commit): Promise<Commit[]> {
+    console.log(`Writing ${printCommit(commit)}`);
+    this.prison.add(commit, deps(commit));
+    const initialRes = await this.writeSingle(commit);
+    if (!initialRes) {
+      console.log(`OUT OF ORDER ${printCommit(commit)}`);
+      return [];
+    }
+    console.log(`IN ORDER: ${printCommit(commit)}`);
+
+    const totalRes: Commit[] = [initialRes];
+    const stack: Commit[] = [initialRes];
+    // BUG: if the caller didnt await, a parent could be
+    while (stack.length > 0) {
+      console.log(`Freeing children of ${printCommit(commit)}`);
+      const next = stack.pop();
+      const newlyFreed = this.prison.markResolved(next!.ref);
+      if (newlyFreed.length > 0)
+        console.log(`Freed ${newlyFreed.map((c) => c.ref)}`);
+      totalRes.push(...newlyFreed);
+      stack.push(...newlyFreed);
+    }
+
+    return totalRes;
+  }
+
+  private async writeSingle(commit: Commit): Promise<Commit | undefined> {
+    const deps: string[] = [];
+    if (commit.baseRef) {
+      deps.push(commit.baseRef);
+    }
+    if (commit.mergeRef) {
+      deps.push(commit.mergeRef);
+    }
+
+    if (deps.length === 0) {
+      return commit;
+    }
+
+    const lookUpResults = await Promise.all(
+      deps.map((dep) => this.lookup(dep)),
+    );
+
+    const actuallyMissing = deps.filter(
+      (dep) => !lookUpResults.find((res) => res?.ref === dep),
+    );
+
+    if (actuallyMissing.length > 0) {
+      console.log(`${printCommit(commit)} missing ${actuallyMissing}`);
+      this.prison.add(commit, actuallyMissing);
+      return undefined;
+    }
+
+    return commit;
+  }
+}
+
+class TaskSerializer<T, R> {
+  private processor: (item: T) => Promise<R>;
+  private current: Promise<R> | undefined;
+  constructor(processor: (item: T) => Promise<R>) {
+    this.processor = processor;
+  }
+
+  public async add(item: T): Promise<R> {
+    const next = this.current
+      ? this.current.then(() => this.processor(item))
+      : this.processor(item);
+    this.current = next;
+
+    return next;
+  }
+}
+
+// class OrderedMap<T> {
+//   private map = new Map<string, T>();
+
+//   public set(key: string, item: T) {
+//     return this.map.set(key, item);
+//   }
+
+//   public has(key: string) {
+//     return this.map.has(key);
+//   }
+
+//   public delete(key: string) {
+//     return this.map.delete(key);
+//   }
+
+//   public deleteMultiple(keys: string[]) {
+//     for (const key of keys) {
+//       this.delete(key);
+//     }
+//   }
+
+//   public get size() {
+//     return this.map.size;
+//   }
+
+//   public pop(): T | undefined {
+//     if (this.size === 0) {
+//       return undefined;
+//     }
+//     const items = [...this.map.entries()];
+//     const [lastKey, lastVal] = items[items.length - 1];
+//     this.delete(lastKey);
+
+//     return lastVal;
+//   }
+
+//   public filter(pred: (item: T) => boolean): T[] {
+//     return [...this.map.values()].filter(pred);
+//   }
+
+//   public keys(): string[] {
+//     return [...this.map.keys()];
+//   }
+
+//   public values() {
+//     return [...this.map.values()];
+//   }
+// }
+
+class CommitJail {
+  // commitRef -> missing baseRef, mergeRef
+  private deps = new Map<string, string[]>();
+  private prisoners = new Map<string, Commit>();
+
+  public add(commit: Commit, deps: string[]) {
+    this.deps.set(commit.ref, deps);
+    this.prisoners.set(commit.ref, commit);
+  }
+
+  public markResolved(ref: string) {
+    const freed: Commit[] = [];
+    for (const [prisoner, deps] of this.deps) {
+      const remaining = deps.filter((dep) => dep !== ref);
+      if (remaining.length === 0) {
+        // FREE ME
+        freed.push(this.prisoners.get(prisoner)!);
+        this.prisoners.delete(prisoner);
+        this.deps.delete(prisoner);
+        continue;
+      }
+      this.deps.set(prisoner, remaining);
+    }
+
+    return freed;
+  }
+
+  public contents() {
+    return [...this.prisoners.keys()];
+  }
+
+  public get size() {
+    return this.prisoners.size;
   }
 }

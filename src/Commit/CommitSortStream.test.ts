@@ -1,5 +1,5 @@
 import * as fc from "fast-check";
-import { TopologicalSortStream } from "./CommitSortStream";
+import { TopologicalSortStream2 as TopologicalSortStream } from "./CommitSortStream";
 import type { Commit, CommitCache } from "./CommitSortStream";
 import { CommitDAGArb } from "./CommitGraphArbitrary";
 
@@ -35,7 +35,7 @@ export const makeBranch = ({
     return [
       ...branch,
       {
-        ref: `${name}${n}`,
+        ref: `${name}_${n}`,
         baseRef: prev?.ref,
       },
     ];
@@ -58,8 +58,24 @@ export const joinBranches = (a: Commit[], b: Commit[]): Commit => {
   };
 };
 
-const newLocalOnlyStream = () =>
-  new TopologicalSortStream(new Map(), async () => undefined);
+const newLookup = () => {
+  const map = new Map<string, Commit>();
+
+  return {
+    map,
+    lookup: async (ref: string) => map.get(ref),
+    write: (commits: Commit[]) =>
+      commits.forEach((commit) => map.set(commit.ref, commit)),
+  };
+};
+const newLocalOnlyStream = () => {
+  const { lookup, write } = newLookup();
+
+  return {
+    write,
+    stream: new TopologicalSortStream(lookup),
+  };
+};
 
 class CacheWithInvalidation implements CommitCache {
   private capacity: number;
@@ -125,10 +141,13 @@ describe("TopologicalSortStream", () => {
       length: 3,
     });
 
-    const stream = newLocalOnlyStream();
+    const { write, stream } = newLocalOnlyStream();
     const firstRes = await stream.write(branch[0]);
+    write(firstRes);
     const secondRes = await stream.write(branch[1]);
+    write(secondRes);
     const thirdRes = await stream.write(branch[2]);
+    write(thirdRes);
 
     // each write op immediately resolves to the input,
     // as they are in order
@@ -148,13 +167,15 @@ describe("TopologicalSortStream", () => {
       length: 3,
     });
 
-    const stream = newLocalOnlyStream();
+    const { write, stream } = newLocalOnlyStream();
     const secondRes = await stream.write(branch[1]);
+    write(secondRes);
 
     // out of order!
     expect(secondRes.length).toEqual(0);
 
     const firstRes = await stream.write(branch[0]);
+    write(firstRes);
 
     // first write op is no longer orphaned
     expect(firstRes.length).toEqual(2);
@@ -168,34 +189,67 @@ describe("TopologicalSortStream", () => {
     expect(thirdRes[0].ref).toEqual(branch[2].ref);
   });
 
+  it("handles writing concurrent in order", async () => {
+    const branch = makeBranch({
+      name: "list",
+      length: 2,
+    });
+
+    const store = new Map<string, Commit>();
+    const lookup = async (ref: string) =>
+      new Promise<Commit | undefined>((res) => res(store.get(ref)));
+    const stream = new TopologicalSortStream(lookup);
+    const writeAndForward = async (c: Commit) => {
+      const res = await stream.write(c);
+      for (const c of res) {
+        store.set(c.ref, c);
+      }
+      return res;
+    };
+
+    const result = await Promise.all(branch.map(writeAndForward));
+    // const result: Commit[][] = [];
+    // for (const c of branch) {
+    //   const res = await stream.write(c);
+    //   result.push(res);
+    //   write(res);
+    // }
+
+    expect(result.every((r) => r.length === 1)).toBeTruthy();
+    expect(stream.currentOrphans.length).toEqual(0);
+  });
+
   it("handles out of order merge", async () => {
     const branch1 = makeBranch({
-      name: "branch1",
+      name: "branch-1",
       length: 3,
     });
 
     const root = branch1[1];
 
     const branch2 = makeBranch({
-      name: "branch2",
+      name: "branch-2",
       length: 2,
       base: root,
     });
 
     const join = joinBranches(branch1, branch2);
 
-    const stream = newLocalOnlyStream();
+    const { write, stream } = newLocalOnlyStream();
     await Promise.all(branch1.map((commit) => stream.write(commit)));
 
     const mergeRes = await stream.write(join);
+    write(mergeRes);
     // we don't have the commits of the branch we are joining yet
     expect(mergeRes.length).toEqual(0);
 
     // this is in order, but not enough to resolve the join
     const branch2Res1 = await stream.write(branch2[0]);
-    expect(branch2Res1.length).toEqual(1);
+    write(branch2Res1);
+    expect(branch2Res1.length).toEqual(0);
 
     const branch2Res2 = await stream.write(branch2[1]);
+    write(branch2Res2);
     // in order, AND recovers the join
     expect(branch2Res2.length).toEqual(2);
     expect(branch2Res2[0].ref).toEqual(branch2[1].ref);
@@ -211,7 +265,7 @@ describe("TopologicalSortStream", () => {
         return Promise.resolve(cache.get(ref));
       };
 
-      const uut = new TopologicalSortStream(cache, fetchItem);
+      const uut = new TopologicalSortStream(fetchItem);
       const orderedNodes: Commit[] = [];
 
       // example usage where orderedNodes represents our 'sink'
@@ -228,7 +282,7 @@ describe("TopologicalSortStream", () => {
 
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
-    }
+    },
   );
 
   it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
@@ -251,10 +305,14 @@ describe("TopologicalSortStream", () => {
 
       const fetchItemScheduled = (id: string) => s.schedule(fetchItem(id));
 
-      const uut = new TopologicalSortStream(cache, fetchItemScheduled);
+      const uut = new TopologicalSortStream(fetchItemScheduled);
 
       const writeInOrder = async (commit: Commit) => {
         const orderedBatch = await uut.write(commit);
+        for (const commit of orderedBatch) {
+          // NOTE: IRL we'd enqueue these, and our lookup would need to know to check currently enqueued
+          cache.set(commit.ref, commit);
+        }
         orderedNodes.push(...orderedBatch);
       };
 
@@ -277,7 +335,7 @@ describe("TopologicalSortStream", () => {
       expect(currentOrphans.length).toEqual(0);
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
-    }
+    },
   );
 
   it("PROPERTY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {

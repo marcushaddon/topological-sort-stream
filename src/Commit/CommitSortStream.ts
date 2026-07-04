@@ -5,14 +5,14 @@ export interface Commit {
   main: boolean;
 }
 
-const deps = (c: Commit) =>
+const deps = (c: Commit): string[] =>
   c.baseRef && c.mergeRef
     ? [c.baseRef, c.mergeRef]
     : c.baseRef
       ? [c.baseRef]
       : [];
 
-const printCommit = (c: Commit) =>
+export const printCommit = (c: Commit) =>
   (c.mergeRef
     ? `${c.mergeRef}+${c.baseRef}->`
     : c.baseRef
@@ -189,6 +189,10 @@ export class TopologicalSortStream2 {
     this.writeInner.bind(this),
   );
 
+  // Track refs we've returned - bridges the gap between "stream processed it"
+  // and "caller updated external lookup"
+  private processed = new Set<string>();
+
   public constructor(lookup: (ref: string) => Promise<Commit | undefined>) {
     this.lookup = lookup;
   }
@@ -206,7 +210,6 @@ export class TopologicalSortStream2 {
 
   private async writeInner(commit: Commit): Promise<Commit[]> {
     console.log(`Writing ${printCommit(commit)}`);
-    this.prison.add(commit, deps(commit));
     const initialRes = await this.writeSingle(commit);
     if (!initialRes) {
       console.log(`OUT OF ORDER ${printCommit(commit)}`);
@@ -216,7 +219,6 @@ export class TopologicalSortStream2 {
 
     const totalRes: Commit[] = [initialRes];
     const stack: Commit[] = [initialRes];
-    // BUG: if the caller didnt await, a parent could be
     while (stack.length > 0) {
       console.log(`Freeing children of ${printCommit(commit)}`);
       const next = stack.pop();
@@ -227,29 +229,36 @@ export class TopologicalSortStream2 {
       stack.push(...newlyFreed);
     }
 
+    // Mark all results as processed BEFORE returning, so subsequent
+    // writes in the TaskSerializer chain can find them
+    for (const c of totalRes) {
+      this.processed.add(c.ref);
+    }
+
     return totalRes;
   }
 
   private async writeSingle(commit: Commit): Promise<Commit | undefined> {
-    const deps: string[] = [];
-    if (commit.baseRef) {
-      deps.push(commit.baseRef);
-    }
-    if (commit.mergeRef) {
-      deps.push(commit.mergeRef);
-    }
+    const commitDeps = deps(commit);
 
-    if (deps.length === 0) {
+    if (commitDeps.length === 0) {
       return commit;
     }
 
-    const lookUpResults = await Promise.all(
-      deps.map((dep) => this.lookup(dep)),
-    );
+    // Check which deps need external lookup (not already known to be processed)
+    const needsLookup = commitDeps.filter((dep) => !this.processed.has(dep));
 
-    const actuallyMissing = deps.filter(
-      (dep) => !lookUpResults.find((res) => res?.ref === dep),
-    );
+    let actuallyMissing: string[] = [];
+
+    if (needsLookup.length > 0) {
+      const lookUpResults = await Promise.all(
+        needsLookup.map((dep) => this.lookup(dep)),
+      );
+
+      actuallyMissing = needsLookup.filter(
+        (dep) => !lookUpResults.find((res) => res?.ref === dep),
+      );
+    }
 
     if (actuallyMissing.length > 0) {
       console.log(`${printCommit(commit)} missing ${actuallyMissing}`);

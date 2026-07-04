@@ -1,5 +1,8 @@
 import * as fc from "fast-check";
-import { TopologicalSortStream2 as TopologicalSortStream } from "./CommitSortStream";
+import {
+  printCommit,
+  TopologicalSortStream2 as TopologicalSortStream,
+} from "./CommitSortStream";
 import type { Commit, CommitCache } from "./CommitSortStream";
 import { CommitDAGArb } from "./CommitGraphArbitrary";
 
@@ -236,7 +239,10 @@ describe("TopologicalSortStream", () => {
     const join = joinBranches(branch1, branch2);
 
     const { write, stream } = newLocalOnlyStream();
-    await Promise.all(branch1.map((commit) => stream.write(commit)));
+    const branch1Reses = await Promise.all(
+      branch1.map((commit) => stream.write(commit)),
+    );
+    const branch1Res = branch1Reses.flatMap((c) => c);
 
     const mergeRes = await stream.write(join);
     write(mergeRes);
@@ -246,7 +252,7 @@ describe("TopologicalSortStream", () => {
     // this is in order, but not enough to resolve the join
     const branch2Res1 = await stream.write(branch2[0]);
     write(branch2Res1);
-    expect(branch2Res1.length).toEqual(0);
+    expect(branch2Res1.length).toEqual(1);
 
     const branch2Res2 = await stream.write(branch2[1]);
     write(branch2Res2);
@@ -254,6 +260,15 @@ describe("TopologicalSortStream", () => {
     expect(branch2Res2.length).toEqual(2);
     expect(branch2Res2[0].ref).toEqual(branch2[1].ref);
     expect(branch2Res2[1].ref).toEqual(join.ref);
+    const inCallOrder = [
+      ...branch1Res,
+      ...mergeRes,
+      ...branch2Res1,
+      ...branch2Res2,
+    ];
+    console.log(inCallOrder.map((c) => printCommit(c)));
+    expect(topologicallySorted([...inCallOrder])).toBeTruthy();
+    expect(inCallOrder.length).toEqual(branch1.length + branch2.length + 1); // + 1 for the merge
   });
 
   const topSortPropertyWithOrderedPromises = fc.asyncProperty(

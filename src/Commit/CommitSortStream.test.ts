@@ -268,7 +268,7 @@ describe("TopologicalSortStream", () => {
 
   it("PROPERTY: outgoing topological order (no cache invalidation, unscheduled)", async () => {
     await fc.assert(topSortPropertyWithOrderedPromises, {
-      numRuns: 10,
+      numRuns: 1000,
     });
   });
 
@@ -334,7 +334,7 @@ describe("TopologicalSortStream", () => {
 
   it("PROPERTY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 10,
+      numRuns: 1000,
       endOnFailure: true,
     });
   });

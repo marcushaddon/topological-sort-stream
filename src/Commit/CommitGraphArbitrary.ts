@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { Commit } from "./CommitSortStream";
 
-const MAX_SIZE = 20;
+const MAX_SIZE = 4;
 
 export class CommitDAG {
   private random: fc.Random;

@@ -240,17 +240,20 @@ describe("TopologicalSortStream", () => {
         return Promise.resolve(cache.get(ref));
       };
 
-      const uut = new TopologicalSortStream(fetchItem, true);
+      const uut = new TopologicalSortStream(fetchItem);
       const orderedNodes: Commit[] = [];
 
       // example usage where orderedNodes represents our 'sink'
-      // that assumes topological order
+      // that assumes topological order.
+      // NOTE: this test never flushes emitted commits anywhere the
+      // lookup can find them, so it deliberately does NOT acknowledge
+      // (hence "no cache invalidation"): the stream's internal cache is
+      // the only record that a dep was already emitted. Acknowledging
+      // here would drop that record before late-arriving children could
+      // be satisfied, jailing them forever.
       const writeInOrder = async (commit: Commit) => {
         const orderedBatch = await uut.write(commit);
         orderedNodes.push(...orderedBatch);
-        for (const ordered of orderedBatch) {
-          uut.acknowledge(ordered.ref);
-        }
       };
 
       const unorderedNodes = dag.commitsShuffled();
@@ -288,11 +291,17 @@ describe("TopologicalSortStream", () => {
 
       const write = async (c: Commit) => {
         const res = await uut.write(c);
+        // Record emission order BEFORE the awaited flush: uut.write
+        // resolves in topological order (serialized, children emitted in
+        // their parent's batch), but awaiting flushScheduled lets the
+        // scheduler complete a child's flush loop before its parent's,
+        // which would invert orderedNodes. flush-then-ack still runs so
+        // the stream's cache stays bounded.
+        orderedNodes.push(...res);
         for (const commit of res) {
           await flushScheduled(commit);
           uut.acknowledge(commit.ref);
         }
-        orderedNodes.push(...res);
       };
 
       const unorderedNodes = dag.commitsShuffled();

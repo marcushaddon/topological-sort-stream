@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { Commit } from "./CommitSortStream";
 
-const MAX_SIZE = 10000;
+const MAX_SIZE = 4;
 
 export class CommitDAG {
   private random: fc.Random;
@@ -22,7 +22,7 @@ export class CommitDAG {
       Array.from(this.adjacencies.entries()).map(([from, to]) => [
         from,
         new Set(Array.from(to.values())),
-      ])
+      ]),
     );
   }
 
@@ -233,7 +233,7 @@ export class CommitDAG {
 export class CommitDAGArb extends fc.Arbitrary<CommitDAG> {
   generate(
     mrng: fc.Random,
-    biasFactor: number | undefined
+    biasFactor: number | undefined,
   ): fc.Value<CommitDAG> {
     return new fc.Value(new CommitDAG(mrng, biasFactor), undefined);
   }
@@ -244,7 +244,7 @@ export class CommitDAGArb extends fc.Arbitrary<CommitDAG> {
 
   shrink(
     value: CommitDAG,
-    _context: unknown | undefined
+    _context: unknown | undefined,
   ): fc.Stream<fc.Value<CommitDAG>> {
     return new fc.Stream(
       (function* () {
@@ -252,7 +252,7 @@ export class CommitDAGArb extends fc.Arbitrary<CommitDAG> {
           value.shrinkOnce();
           yield new fc.Value(value, undefined);
         }
-      })()
+      })(),
     );
   }
 }

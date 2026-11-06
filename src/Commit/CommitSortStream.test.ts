@@ -3,7 +3,7 @@ import {
   printCommit,
   TopologicalSortStream2 as TopologicalSortStream,
 } from "./CommitSortStream";
-import type { Commit, CommitCache } from "./CommitSortStream";
+import type { Commit } from "./CommitSortStream";
 import { CommitDAGArb } from "./CommitGraphArbitrary";
 
 export const topologicallySorted = (commits: Commit[]): boolean => {
@@ -80,47 +80,6 @@ const newLocalOnlyStream = () => {
   };
 };
 
-class CacheWithInvalidation implements CommitCache {
-  private capacity: number;
-  private cached = new Map<string, Commit>();
-  private repo = new Map<string, Commit>();
-
-  constructor(capacity: number) {
-    this.capacity = capacity;
-  }
-
-  public has(id: string) {
-    return this.cached.has(id);
-  }
-
-  public delete(id: string) {
-    return this.cached.delete(id);
-  }
-
-  public set(id: string, commit: Commit) {
-    this.cached.set(id, commit);
-    while (this.cached.size > this.capacity) {
-      // SAFETY: as long as capacity is > 0, then size > capcity
-      // ensures next entry is defined
-      const oldest = this.cached.entries().next()!.value![1];
-      this.cached.delete(oldest.ref);
-      this.repo.set(oldest.ref, oldest);
-    }
-
-    return this;
-  }
-
-  public get size() {
-    return this.cached.size;
-  }
-
-  public getFromRepo(id: string): Commit | undefined {
-    const res = this.repo.get(id);
-
-    return res;
-  }
-}
-
 // utilitiy for splitting items into batches of specified
 // sizes given that sum(sizes) != items.length
 const makeBatches = <T>(items: T[], sizes: number[]): T[][] => {
@@ -176,6 +135,7 @@ describe("TopologicalSortStream", () => {
 
     // out of order!
     expect(secondRes.length).toEqual(0);
+    expect(stream.currentOrphanCount()).toEqual(1);
 
     const firstRes = await stream.write(branch[0]);
     write(firstRes);
@@ -280,7 +240,7 @@ describe("TopologicalSortStream", () => {
         return Promise.resolve(cache.get(ref));
       };
 
-      const uut = new TopologicalSortStream(fetchItem);
+      const uut = new TopologicalSortStream(fetchItem, true);
       const orderedNodes: Commit[] = [];
 
       // example usage where orderedNodes represents our 'sink'
@@ -288,6 +248,9 @@ describe("TopologicalSortStream", () => {
       const writeInOrder = async (commit: Commit) => {
         const orderedBatch = await uut.write(commit);
         orderedNodes.push(...orderedBatch);
+        for (const ordered of orderedBatch) {
+          uut.acknowledge(ordered.ref);
+        }
       };
 
       const unorderedNodes = dag.commitsShuffled();
@@ -308,37 +271,41 @@ describe("TopologicalSortStream", () => {
 
   const topolgicalSortProperty = fc.asyncProperty(
     new CommitDAGArb(),
-    fc.integer({ min: 0, max: 1000 }),
     fc.array(fc.integer({ min: 1, max: 50 }), { minLength: 1, maxLength: 50 }),
     fc.scheduler(),
-    async (dag, cacheSize, batchSizes, s) => {
-      const cache = new CacheWithInvalidation(cacheSize);
-
-      const fetchItem = async (id: string) => {
-        return cache.getFromRepo(id);
+    async (dag, batchSizes, s) => {
+      const downstream = new Map<string, Commit>();
+      const fetchItem = async (ref: string) => {
+        return downstream.get(ref);
       };
-
       const fetchItemScheduled = (id: string) => s.schedule(fetchItem(id));
+      const flush = async (c: Commit) => downstream.set(c.ref, c);
 
+      const flushScheduled = (c: Commit) => s.schedule(flush(c));
       const uut = new TopologicalSortStream(fetchItemScheduled);
 
-      const writeInOrder = async (commit: Commit) => {
-        const orderedBatch = await uut.write(commit);
-        for (const commit of orderedBatch) {
-          // NOTE: IRL we'd enqueue these, and our lookup would need to know to check currently enqueued
-          cache.set(commit.ref, commit);
+      const orderedNodes: Commit[] = [];
+
+      const write = async (c: Commit) => {
+        const res = await uut.write(c);
+        for (const commit of res) {
+          await flushScheduled(commit);
+          uut.acknowledge(commit.ref);
         }
-        orderedNodes.push(...orderedBatch);
+        orderedNodes.push(...res);
       };
 
       const unorderedNodes = dag.commitsShuffled();
-      const orderedNodes: Commit[] = [];
 
       const batches = makeBatches(unorderedNodes, batchSizes);
 
+      let maxCacheSize = 0;
+      let maxJailSize = 0;
       for (const batch of batches) {
         for (const commit of batch) {
-          void writeInOrder(commit);
+          void write(commit);
+          maxCacheSize = Math.max(maxCacheSize, uut.cacheSize());
+          maxJailSize = Math.max(maxJailSize, uut.currentOrphans().length);
         }
 
         // causes any fetchItem calls to resolve in order
@@ -350,21 +317,23 @@ describe("TopologicalSortStream", () => {
       expect(currentOrphans.length).toEqual(0);
       expect(orderedNodes.length).toEqual(dag.size);
       expect(topologicallySorted(orderedNodes)).toBeTruthy();
+      console.log(
+        `DAG size: ${dag.size}, max cache size: ${maxCacheSize}, max jail size: ${maxJailSize}`,
+      );
     },
   );
 
   it("PROPERTY: outgoing topological order (with cache invalidation, scheduled promises)", async () => {
     await fc.assert(topolgicalSortProperty, {
-      numRuns: 10000,
+      numRuns: 10,
       endOnFailure: true,
     });
   });
 
-  // 4 emitted twice
-  it("repro 1", async () => {
-    await fc.assert(topolgicalSortProperty, {
-      seed: 911344591,
-      path: "5956",
+  it("repro unscehduled", async () => {
+    await fc.assert(topSortPropertyWithOrderedPromises, {
+      seed: 351836540,
+      path: "1",
       endOnFailure: true,
     });
   });

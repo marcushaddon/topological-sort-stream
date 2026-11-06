@@ -6,3 +6,5 @@ TWHO BIG IDEAS:
 
 I'm interested in if there is a way that Bounded LRU could be always correct, I think 3 is the most sure fire and is an acceptable API, and I'm also wondering   
 if an API where the strea's .write method is sync and returns nothing, and the stream emits groups of sorted commits could simplify things. \   
+
+Another alternative, have a `.writeBatch(commits)` method, and we can just sort them internally, but the consumer must await that batch being cleared before writing another

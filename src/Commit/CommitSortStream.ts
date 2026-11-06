@@ -32,28 +32,6 @@ export const ancestors = (c: Commit): string[] => {
   return res;
 };
 
-export interface CommitCache {
-  set(ref: string, commit: Commit): CommitCache;
-  has(ref: string): boolean;
-  delete(ref: string): void;
-}
-
-type WriteResult =
-  | {
-      name: "success";
-    }
-  | {
-      name: "missingDep";
-      dep: string;
-    };
-const writeSuccess = (): WriteResult => ({ name: "success" });
-const missingDep = (dep: string): WriteResult => ({ name: "missingDep", dep });
-
-type WriteSingleResult =
-  | { name: "success"; commit: Commit }
-  | { name: "orphaned"; commit: Commit }
-  | { name: "noop" };
-
 export interface ITopologicalSortStream {
   write(commit: Commit): Promise<Commit[]>;
 }
@@ -67,118 +45,6 @@ export interface ITopologicalSortStream {
  * If the commit was not in topological order, the result will
  * be empty.
  */
-export class TopologicalSortStream {
-  private commitCache: CommitCache;
-  private lookupCommit: (ref: string) => Promise<Commit | undefined>;
-  // reverse index of missing dep -> commit
-  private unresolvedCommits: Map<string, Commit> = new Map<string, Commit>();
-
-  public constructor(
-    itemCache: CommitCache = new Map<string, Commit>(),
-    lookupCommit: (ref: string) => Promise<Commit | undefined>,
-  ) {
-    this.commitCache = itemCache;
-    this.lookupCommit = lookupCommit;
-  }
-
-  /**
-   * TODO: wrap writeInner in try/finally to make sure always removed from processing
-   */
-  public async write(commit: Commit): Promise<Commit[]> {
-    const initialResult = await this.writeSingle(commit);
-    if (initialResult.name !== "success") {
-      return [];
-    }
-    const result: Commit[] = [initialResult.commit];
-
-    const stack: Commit[] = [commit];
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-
-      const orphanedChildren = Array.from(
-        this.unresolvedCommits.values(),
-      ).filter((c) => ancestors(c).find((a) => a === current.ref));
-
-      for (const child of orphanedChildren) {
-        const childResult = await this.writeSingle(child);
-        if (childResult.name === "success") {
-          this.clearOrphan(childResult.commit);
-          // SAFETY: if we are adding this to the result,
-          // the result already contains our ancestor
-          result.push(childResult.commit);
-          stack.push(childResult.commit);
-        }
-        // If noop or orphaned, we don't add to result
-      }
-    }
-
-    return result;
-  }
-
-  private async writeSingle(commit: Commit): Promise<WriteSingleResult> {
-    this.recordOrphan(commit);
-    const res = await this.writeSingleInner(commit);
-
-    switch (res.name) {
-      case "success":
-        this.commitCache.set(commit.ref, commit);
-        this.clearOrphan(commit);
-        return { name: "success", commit };
-      case "missingDep":
-        return { name: "orphaned", commit };
-    }
-  }
-
-  /**
-   * Returns the commit if it is next in a valid top-sort.
-   * Otherwise indexes it under the first missing ancestor
-   */
-  private async writeSingleInner(commit: Commit): Promise<WriteResult> {
-    const deps = ancestors(commit);
-    if (deps.length === 0) {
-      // DING DING DING, we could have a child in processing
-      return writeSuccess();
-    }
-
-    for (const ancestor of deps) {
-      const seen = await this.hasSeen(ancestor);
-      if (!seen) {
-        return missingDep(ancestor);
-      }
-    }
-
-    return writeSuccess();
-  }
-
-  private async hasSeen(ref: string) {
-    if (this.commitCache.has(ref)) {
-      return true;
-    }
-
-    // TODO: try/catch for actual errors
-    const fetchedRes = await this.lookupCommit(ref);
-    if (fetchedRes) {
-      this.commitCache.set(fetchedRes.ref, fetchedRes);
-      return true;
-    }
-
-    return false;
-  }
-
-  private recordOrphan(commit: Commit) {
-    this.unresolvedCommits.set(commit.ref, commit);
-  }
-
-  private clearOrphan(commit: Commit) {
-    this.unresolvedCommits.delete(commit.ref);
-  }
-
-  public currentOrphans(): string[] {
-    return Array.from(this.unresolvedCommits.keys());
-  }
-}
-
-//
 export class TopologicalSortStream2 {
   private lookup: (ref: string) => Promise<Commit | undefined>;
   // reverse index of missing dep -> commit
@@ -189,42 +55,72 @@ export class TopologicalSortStream2 {
     this.writeInner.bind(this),
   );
 
-  // Track refs we've returned - bridges the gap between "stream processed it"
-  // and "caller updated external lookup"
-  private processed = new Set<string>();
+  private passed = new Set<string>();
+  // BOOKMARCUS: we need to also track 'in progress'
+  // we also need to be careful once we are recovering children
+  // from jail, keep in mind what the passed/inProgress/jail status of
+  // the parent is based on the current status of the commit that started this
+  // loop (and that we will need to also do another async lookup for those children
+  // and during THAT, those childrens children could come it). Also note that
+  // if we just 'recurse' while attempting to recover a child, if it sees that
+  // the parent trying to recover it is in progress it will put itself back
+  // in jail.
+  // maybe write all states a commit can be in x the states its parent can be in x
+  // the states it's child can be in and make a decision table like thing?
 
-  public constructor(lookup: (ref: string) => Promise<Commit | undefined>) {
+  private debug: boolean;
+
+  public constructor(
+    lookup: (ref: string) => Promise<Commit | undefined>,
+    debug = false,
+  ) {
     this.lookup = lookup;
+    this.debug = debug;
+  }
+
+  private dbg(...args: any[]) {
+    if (this.debug) {
+      console.log(...args);
+    }
   }
 
   public currentOrphans(): string[] {
     return this.prison.contents();
   }
 
+  public currentOrphanCount(): number {
+    return this.prison.size;
+  }
+
+  public acknowledge(ref: string) {
+    this.passed.delete(ref);
+    this.dbg(`Acknowledged ${ref}`);
+  }
+
   public async write(commit: Commit): Promise<Commit[]> {
-    console.log(`Enqueueing ${printCommit(commit)}`);
+    this.dbg(`Enqueueing ${printCommit(commit)}`);
     const prom = this.tasks.add(commit);
-    console.log(`Eqneue'd ${printCommit(commit)}`);
+    this.dbg(`Eqneue'd ${printCommit(commit)}`);
     return prom;
   }
 
   private async writeInner(commit: Commit): Promise<Commit[]> {
-    console.log(`Writing ${printCommit(commit)}`);
+    this.dbg(`Writing ${printCommit(commit)}`);
     const initialRes = await this.writeSingle(commit);
     if (!initialRes) {
-      console.log(`OUT OF ORDER ${printCommit(commit)}`);
+      this.dbg(`OUT OF ORDER ${printCommit(commit)}`);
       return [];
     }
-    console.log(`IN ORDER: ${printCommit(commit)}`);
+    this.dbg(`IN ORDER: ${printCommit(commit)}`);
 
     const totalRes: Commit[] = [initialRes];
     const stack: Commit[] = [initialRes];
     while (stack.length > 0) {
-      console.log(`Freeing children of ${printCommit(commit)}`);
+      this.dbg(`Freeing children of ${printCommit(commit)}`);
       const next = stack.pop();
       const newlyFreed = this.prison.markResolved(next!.ref);
       if (newlyFreed.length > 0)
-        console.log(`Freed ${newlyFreed.map((c) => c.ref)}`);
+        this.dbg(`Freed ${newlyFreed.map((c) => c.ref)}`);
       totalRes.push(...newlyFreed);
       stack.push(...newlyFreed);
     }
@@ -232,7 +128,7 @@ export class TopologicalSortStream2 {
     // Mark all results as processed BEFORE returning, so subsequent
     // writes in the TaskSerializer chain can find them
     for (const c of totalRes) {
-      this.processed.add(c.ref);
+      this.passed.add(c.ref);
     }
 
     return totalRes;
@@ -246,7 +142,7 @@ export class TopologicalSortStream2 {
     }
 
     // Check which deps need external lookup (not already known to be processed)
-    const needsLookup = commitDeps.filter((dep) => !this.processed.has(dep));
+    const needsLookup = commitDeps.filter((dep) => !this.passed.has(dep));
 
     let actuallyMissing: string[] = [];
 
@@ -261,12 +157,16 @@ export class TopologicalSortStream2 {
     }
 
     if (actuallyMissing.length > 0) {
-      console.log(`${printCommit(commit)} missing ${actuallyMissing}`);
+      this.dbg(`${printCommit(commit)} missing ${actuallyMissing}`);
       this.prison.add(commit, actuallyMissing);
       return undefined;
     }
 
     return commit;
+  }
+
+  public cacheSize() {
+    return this.passed.size;
   }
 }
 
@@ -286,55 +186,6 @@ class TaskSerializer<T, R> {
     return next;
   }
 }
-
-// class OrderedMap<T> {
-//   private map = new Map<string, T>();
-
-//   public set(key: string, item: T) {
-//     return this.map.set(key, item);
-//   }
-
-//   public has(key: string) {
-//     return this.map.has(key);
-//   }
-
-//   public delete(key: string) {
-//     return this.map.delete(key);
-//   }
-
-//   public deleteMultiple(keys: string[]) {
-//     for (const key of keys) {
-//       this.delete(key);
-//     }
-//   }
-
-//   public get size() {
-//     return this.map.size;
-//   }
-
-//   public pop(): T | undefined {
-//     if (this.size === 0) {
-//       return undefined;
-//     }
-//     const items = [...this.map.entries()];
-//     const [lastKey, lastVal] = items[items.length - 1];
-//     this.delete(lastKey);
-
-//     return lastVal;
-//   }
-
-//   public filter(pred: (item: T) => boolean): T[] {
-//     return [...this.map.values()].filter(pred);
-//   }
-
-//   public keys(): string[] {
-//     return [...this.map.keys()];
-//   }
-
-//   public values() {
-//     return [...this.map.values()];
-//   }
-// }
 
 class CommitJail {
   // commitRef -> missing baseRef, mergeRef
